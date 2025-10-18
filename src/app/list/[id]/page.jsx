@@ -15,10 +15,10 @@ import {
   query,
 } from "firebase/firestore";
 import { removeItemById, togglePublic, renameList } from "@/lib/wishlists";
-import { libroSearchByIsbn, libroSearchUrl, libroGiftCreditsUrl } from "@/lib/libro";
+import { libroSearchByIsbn, libroSearchUrl } from "@/lib/libro";
 
 export default function ListPage() {
-  const { id } = useParams();      // wishlist id
+  const { id } = useParams(); // wishlist id
   const router = useRouter();
 
   const [uid, setUid] = useState(null);
@@ -35,7 +35,7 @@ export default function ListPage() {
     return () => unsub();
   }, [router]);
 
-  // subscribe to list + items (keep each item's doc id!)
+  // subscribe to list + items (keep doc ids!)
   useEffect(() => {
     if (!uid || !id) return;
 
@@ -128,22 +128,14 @@ export default function ListPage() {
                 <div style={{ opacity: .6, fontSize: 12 }}>ID: {it.id}{it.isbn ? ` • ISBN: ${it.isbn}` : ""}</div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  {/* Specific-book route (best via ISBN search) */}
                   {it.isbn && (
                     <a className="cc-btn-outline" href={libroSearchByIsbn(it.isbn)} target="_blank" rel="noreferrer">
-                      🎧 Find this on Libro.fm
+                      🎧 Find on Libro.fm
                     </a>
                   )}
-                  {/* Title/author search as a fallback */}
                   <a className="cc-btn-outline" href={libroSearchUrl(it.title, it.author)} target="_blank" rel="noreferrer">
                     🔎 Search by title/author
                   </a>
-                  {/* Generic gift credits flow */}
-                  <a className="cc-btn-outline" href={libroGiftCreditsUrl()} target="_blank" rel="noreferrer">
-                    💝 Gift credits
-                  </a>
-
-                  {/* Delete uses the doc id (reliable) */}
                   <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>🗑️ Delete</button>
                 </div>
               </div>
