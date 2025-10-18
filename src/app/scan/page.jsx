@@ -1,7 +1,7 @@
 ﻿"use client";
 import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
-import { ensureAuth, db, auth } from "@/lib/firebase"; // use "../../lib/firebase" if you aren't using the @ alias
+import { ensureAuth, db, auth } from "@/lib/firebase";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
 async function lookupBook(isbn) {
@@ -20,70 +20,73 @@ async function lookupBook(isbn) {
 export default function Page() {
   const videoRef = useRef(null);
   const [last, setLast] = useState("");
-  const [status, setStatus] = useState(""); // shows "Added: ..."
-  const [busyUntil, setBusyUntil] = useState(0);
+  const [status, setStatus] = useState("");
   const [reader] = useState(() => new BrowserMultiFormatReader());
-
-  useEffect(() => { ensureAuth(); }, []);
 
   useEffect(() => {
     let stopped = false;
+    ensureAuth();
 
     (async () => {
       try {
-        // request permission early for better device listing
-        await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
+        // ✅ Always request environment camera
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        if (videoRef.current) videoRef.current.srcObject = stream;
 
         const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-        const pick = devices?.[0]?.deviceId;
+        const backCam =
+          devices.find((d) =>
+            d.label.toLowerCase().includes("back") ||
+            d.label.toLowerCase().includes("rear")
+          ) || devices[0];
 
-        await reader.decodeFromConstraints(
-          { video: pick ? { deviceId: { exact: pick } } : { facingMode: { ideal: "environment" } } },
-          videoRef.current,
-          async (result) => {
-            if (stopped || !result) return;
+        await reader.decodeFromVideoDevice(backCam?.deviceId, videoRef.current, async (result) => {
+          if (stopped || !result) return;
+          const digits = result.getText().replace(/\D/g, "");
+          setLast(digits);
+          if (digits.length < 10) return;
+          setStatus("Looking up…");
 
-            const now = Date.now();
-            if (now < busyUntil) return; // debounce multiple hits
+          const book = await lookupBook(digits);
+          if (!book) return setStatus("Not found");
 
-            const raw = result.getText() || "";
-            const digits = raw.replace(/\D/g, "");
-            setLast(digits);
+          const user = await ensureAuth();
+          if (!user?.uid) return;
 
-            if (digits.length < 10) return;
-
-            setBusyUntil(now + 2000); // 2s debounce while we fetch/write
-            setStatus("Looking up…");
-
-            const book = await lookupBook(digits);
-            if (!book) { setStatus("Not found"); return; }
-
-            const user = await ensureAuth();
-            const uid = user?.uid;
-            if (!uid) { setStatus("Auth error"); return; }
-
-            await setDoc(
-              doc(db, "wishlists", uid, "items", book.isbn),
-              { ...book, addedAt: serverTimestamp() },
-              { merge: true }
-            );
-
-            setStatus(`Added: ${book.title}`);
-          }
-        );
-      } catch (e) {
-        console.error(e);
-        setStatus(e?.message || "Camera error");
+          await setDoc(
+            doc(db, "wishlists", user.uid, "items", book.isbn),
+            { ...book, addedAt: serverTimestamp() },
+            { merge: true }
+          );
+          setStatus(`Added: ${book.title}`);
+        });
+      } catch (err) {
+        console.error(err);
+        setStatus("Camera access denied or unavailable.");
       }
     })();
 
-    return () => { stopped = true; try { reader.reset(); } catch {} };
-  }, [busyUntil, reader]);
+    return () => {
+      stopped = true;
+      try { reader.reset(); } catch {}
+      const stream = videoRef.current?.srcObject;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+  }, [reader]);
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui" }}>
       <h1>Scan a Book</h1>
-      <video ref={videoRef} autoPlay muted playsInline style={{ width: "100%", maxWidth: 480, borderRadius: 8, background: "#000" }} />
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{ width: "100%", maxWidth: 480, borderRadius: 8, background: "#000" }}
+      />
       <p style={{ marginTop: 12 }}>Last code: <strong>{last || "—"}</strong></p>
       <p style={{ marginTop: 6, color: "#555" }}>{status}</p>
     </main>
