@@ -1,75 +1,71 @@
-﻿// src/app/page.jsx
-"use client";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { ensureAuth, db, auth } from "@/lib/firebase";
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
-import { libroSearchUrl } from "@/lib/libro";
-import { onAuthStateChanged } from "firebase/auth";
+﻿// src/lib/firebase.js
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
+import {
+  getAuth,
+  onAuthStateChanged,
+  signInAnonymously,
+} from "firebase/auth";
 
-export default function Page() {
-  const [uid, setUid] = useState(null);
-  const [items, setItems] = useState([]);
-  const [isAuthed, setIsAuthed] = useState(false);
+// NOTE: best practice is to move these into .env.local and read via process.env.NEXT_PUBLIC_*.
+// Keeping your current values for now.
+const firebaseConfig = {
+  apiKey: "AIzaSyA9YJl8mP-ILswqVHH7QVNdZo4-jvk_RTs",
+  authDomain: "cozy-and-content.firebaseapp.com",
+  projectId: "cozy-and-content",
+  // FIX: Storage bucket host should be appspot.com
+  storageBucket: "cozy-and-content.appspot.com",
+  messagingSenderId: "8334047711",
+  appId: "1:8334047711:web:c3f4d583d2fad90ff9ac6a",
+};
 
-  // ✅ Track auth state
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setIsAuthed(!!u);
-      if (u?.uid) setUid(u.uid);
-    });
-    return () => unsub();
-  }, []);
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+export const db = getFirestore(app);
+export const auth = getAuth(app);
 
-  // ✅ Subscribe to wishlist once uid is known
-  useEffect(() => {
-    if (!uid) return;
-    const q = query(collection(db, "wishlists", uid, "items"), orderBy("addedAt", "desc"));
-    const unsub = onSnapshot(q, (snap) => setItems(snap.docs.map((d) => d.data())));
-    return unsub;
-  }, [uid]);
+// Optional offline persistence (safe no-op if unsupported)
+try { enableIndexedDbPersistence(db); } catch {}
 
-  return (
-    <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1>Cozy & Content — My Wishlist</h1>
+/**
+ * ensureAuth({ allowAnonymous = false })
+ * - If a user is already signed in, resolves immediately with that user.
+ * - If no user:
+ *    - if allowAnonymous === true, attempts signInAnonymously(); if provider is disabled, returns null.
+ *    - if allowAnonymous === false, returns null (caller decides whether to redirect to /account/login).
+ */
+export function ensureAuth(opts = {}) {
+  const { allowAnonymous = false } = opts;
 
-      {/* ✅ Show Login button if user isn't signed in */}
-      {!isAuthed && (
-        <div style={{ marginBottom: 12 }}>
-          <a href="/account/login" className="cc-btn-outline">Log in</a>
-          <a href="/account/signup" className="cc-btn-outline" style={{ marginLeft: 8 }}>Sign up</a>
-        </div>
-      )}
+  // Already signed in
+  if (auth.currentUser) return Promise.resolve(auth.currentUser);
 
-      <div style={{ display: "flex", gap: 12, margin: "12px 0" }}>
-        <Link href="/scan" style={{ textDecoration: "none" }}>
-          <button>📷 Scan a Book</button>
-        </Link>
-      </div>
+  // Wait for the initial auth state
+  return new Promise((resolve) => {
+    const unsub = onAuthStateChanged(
+      auth,
+      async (u) => {
+        unsub();
+        if (u) return resolve(u);
 
-      {items.length === 0 ? (
-        <p>No books yet. Tap <strong>Scan a Book</strong> to start your wishlist.</p>
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0 }}>
-          {items.map((it) => (
-            <li key={it.isbn} style={{ display: "flex", gap: 12, padding: 12, borderBottom: "1px solid #eee" }}>
-              {it.coverUrl && <img src={it.coverUrl} width={60} height={90} alt={it.title} />}
-              <div>
-                <div style={{ fontWeight: 700 }}>{it.title}</div>
-                <div>{(it.authors || []).join(", ")}</div>
-                <div style={{ opacity: 0.7, fontSize: 12 }}>ISBN: {it.isbn}</div>
-                {libroSearchUrl && (
-                  <div style={{ marginTop: 6 }}>
-                    <a href={libroSearchUrl(it.title, (it.authors || [])[0])} target="_blank" rel="noreferrer">
-                      🎧 Gift on Libro.fm
-                    </a>
-                  </div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </main>
-  );
+        // Not signed in; attempt anonymous only if explicitly allowed
+        if (allowAnonymous) {
+          try {
+            const cred = await signInAnonymously(auth);
+            return resolve(cred.user);
+          } catch (e) {
+            // If anonymous is not enabled, avoid throwing auth/operation-not-allowed here
+            console.error("Anonymous sign-in failed (likely not enabled):", e?.code || e);
+            return resolve(null);
+          }
+        }
+
+        // Caller must handle login flow
+        resolve(null);
+      },
+      () => {
+        // onAuthStateChanged error — return null so caller can handle
+        resolve(null);
+      }
+    );
+  });
 }
