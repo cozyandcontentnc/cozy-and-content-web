@@ -64,92 +64,97 @@ export default function Page() {
       try {
         // Check if camera permissions are granted
         const permissionStatus = await navigator.permissions.query({ name: "camera" });
+
         if (permissionStatus.state !== "granted") {
-          alert("Camera access is required to scan books.");
-          return;
+          const cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+          });
+          if (videoRef.current) videoRef.current.srcObject = cameraStream;
+
+          permissionStatus.state = "granted"; // Update to granted after first request
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
-        if (videoRef.current) videoRef.current.srcObject = stream;
+        // If permission is granted, proceed
+        if (permissionStatus.state === "granted") {
+          const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+          const backCam =
+            devices.find((d) =>
+              d.label.toLowerCase().includes("back") ||
+              d.label.toLowerCase().includes("rear") ||
+              d.label.toLowerCase().includes("environment")
+            ) || devices[0];
 
-        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-        const backCam =
-          devices.find((d) =>
-            d.label.toLowerCase().includes("back") ||
-            d.label.toLowerCase().includes("rear") ||
-            d.label.toLowerCase().includes("environment")
-          ) || devices[0];
+          await reader.decodeFromVideoDevice(
+            backCam?.deviceId,
+            videoRef.current,
+            async (result /*, err */) => {
+              if (!result) return;
 
-        await reader.decodeFromVideoDevice(
-          backCam?.deviceId,
-          videoRef.current,
-          async (result /*, err */) => {
-            if (!result) return;
+              // Normalize to digits (ISBN/EAN)
+              const digits = result.getText().replace(/\D/g, "");
+              if (!digits) return;
 
-            // Normalize to digits (ISBN/EAN)
-            const digits = result.getText().replace(/\D/g, "");
-            if (!digits) return;
+              setLast(digits);
 
-            setLast(digits);
+              // Debounce duplicate reads within 1.5s
+              const now = Date.now();
+              if (lastScanRef.current.code === digits && now - lastScanRef.current.ts < 1500) {
+                return;
+              }
+              lastScanRef.current = { code: digits, ts: now };
 
-            // Debounce duplicate reads within 1.5s
-            const now = Date.now();
-            if (lastScanRef.current.code === digits && now - lastScanRef.current.ts < 1500) {
-              return;
+              // Only continue if not already adding
+              if (busy) return;
+              setBusy(true);
+              setStatus("Looking up…");
+
+              // Lookup book
+              const book = await lookupBook(digits);
+              if (!book) {
+                setStatus("Not found");
+                setBusy(false);
+                return;
+              }
+
+              // Ensure we have an auth UID
+              const user = await ensureAuth();
+              if (!user?.uid) {
+                setStatus("Not signed in.");
+                setBusy(false);
+                return;
+              }
+
+              // Ensure a target list exists (auto-create if none)
+              let targetListId = selectedListId;
+              if (!targetListId) {
+                const name = `Visit — ${new Date().toLocaleDateString()}`;
+                setStatus("Creating a list…");
+                targetListId = await createList(user.uid, name);
+                setSelectedListId(targetListId);
+              }
+
+              // Add to list
+              try {
+                await addItem(user.uid, targetListId, book);
+                setStatus(`Added: ${book.title}`);
+              } catch (e) {
+                console.error(e);
+                setStatus("Failed to add. Check rules/connection.");
+              } finally {
+                setBusy(false);
+              }
             }
-            lastScanRef.current = { code: digits, ts: now };
-
-            // Only continue if not already adding
-            if (busy) return;
-            setBusy(true);
-            setStatus("Looking up…");
-
-            // Lookup book
-            const book = await lookupBook(digits);
-            if (!book) {
-              setStatus("Not found");
-              setBusy(false);
-              return;
-            }
-
-            // Ensure we have an auth UID
-            const user = await ensureAuth();
-            if (!user?.uid) {
-              setStatus("Not signed in.");
-              setBusy(false);
-              return;
-            }
-
-            // Ensure a target list exists (auto-create if none)
-            let targetListId = selectedListId;
-            if (!targetListId) {
-              const name = `Visit — ${new Date().toLocaleDateString()}`;
-              setStatus("Creating a list…");
-              targetListId = await createList(user.uid, name);
-              setSelectedListId(targetListId);
-            }
-
-            // Add to list
-            try {
-              await addItem(user.uid, targetListId, book);
-              setStatus(`Added: ${book.title}`);
-            } catch (e) {
-              console.error(e);
-              setStatus("Failed to add. Check rules/connection.");
-            } finally {
-              setBusy(false);
-            }
-          }
-        );
+          );
+        } else {
+          setStatus("Camera access is required to scan books.");
+        }
       } catch (err) {
         console.error(err);
         setStatus("Camera access denied or unavailable.");
       }
     };
-    
+
     requestCameraPermission();
   }, [reader, selectedListId, busy]);
 
