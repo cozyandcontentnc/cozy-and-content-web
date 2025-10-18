@@ -1,9 +1,8 @@
 // src/lib/firebase.js
 import { initializeApp, getApps } from "firebase/app";
 import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
-import { getAuth, signInAnonymously } from "firebase/auth";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-// Paste your Firebase Web config from Firebase Console → Project settings → Your apps → Web
 const firebaseConfig = {
   apiKey: "AIzaSyA9YJl8mP-ILswqVHH7QVNdZo4-jvk_RTs",
   authDomain: "cozy-and-content.firebaseapp.com",
@@ -17,8 +16,14 @@ const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 
-try { enableIndexedDbPersistence(db); } catch (e) { /* ignore */ }
+try { enableIndexedDbPersistence(db); } catch {}
 
 export async function ensureAuth() {
-  if (!auth.currentUser) await signInAnonymously(auth);
+  if (auth.currentUser) return auth.currentUser;
+  await signInAnonymously(auth);
+  return new Promise((resolve) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) { unsub(); resolve(user); }
+    });
+  });
 }
