@@ -1,4 +1,3 @@
-// src/app/list/[id]/page.jsx
 "use client";
 export const dynamic = "force-dynamic";
 
@@ -26,11 +25,15 @@ export default function ListPage() {
   const [list, setList] = useState(null);
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("");
+  const [userName, setUserName] = useState("");
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u?.uid) router.replace("/account/login");
-      else setUid(u.uid);
+      else {
+        setUid(u.uid);
+        setUserName(u.displayName || "A Cozy Shopper"); // Set displayName or default to a fallback name
+      }
     });
     return () => unsub();
   }, [router]);
@@ -109,11 +112,12 @@ export default function ListPage() {
     }
   }
 
+  // Function to share the entire list with custom message
   function shareList() {
     if (navigator.share) {
       navigator.share({
         title: `Check out this wishlist from ${list.name}`,
-        text: `${list.name} - Here's what I'd like: [user's name] would love these books! Let us know if it's in stock or if it needs to be ordered.`,
+        text: `${userName} would love these books! Check stock and order via the Cozy and Content app!`,
         url: `${location.origin}/s/${list.shareId}`,
       }).then(() => {
         setStatus("List shared successfully!");
@@ -126,11 +130,12 @@ export default function ListPage() {
     }
   }
 
+  // Function to share a single book with a custom message
   function shareBook(item) {
     if (navigator.share) {
       navigator.share({
         title: item.title,
-        text: `${item.title} by ${item.author} — [user's name] would love this book! Let us know if it's in stock or if it needs to be ordered.`,
+        text: `${item.title} by ${item.author} — ${userName} would love this book! Check stock and order via the Cozy and Content app!`,
         url: `${location.origin}/s/${list.shareId}?item=${item.id}`,
       }).then(() => {
         setStatus("Book shared successfully!");
