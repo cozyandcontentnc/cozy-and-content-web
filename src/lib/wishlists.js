@@ -7,8 +7,6 @@ import {
   updateDoc,
   deleteDoc,
   getDoc,
-  addDoc,
-  collection,
 } from "firebase/firestore";
 
 /** Create a short share id */
@@ -25,22 +23,20 @@ function makeShareId(len = 10) {
   return out;
 }
 
-/** Create a list and return its id (or update updatedAt if it exists) */
+/** Create a list and return its id (idempotent-ish) */
 export async function createList(uid, name = "New List", idMaybe) {
   const id = idMaybe || crypto.randomUUID?.() || Math.random().toString(36).slice(2);
   const ref = doc(db, "users", uid, "wishlists", id);
-  const base = {
+  await setDoc(ref, {
     name,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     isPublic: false,
     shareId: null,
-  };
-  await setDoc(ref, base, { merge: true });
+  }, { merge: true });
   return id;
 }
 
-/** Rename a list */
 export async function renameList(uid, listId, newName) {
   await updateDoc(doc(db, "users", uid, "wishlists", listId), {
     name: newName,
@@ -48,29 +44,36 @@ export async function renameList(uid, listId, newName) {
   });
 }
 
-/** Delete a list doc (does not recursively delete items; do that with Admin/CF if needed) */
 export async function deleteList(uid, listId) {
   await deleteDoc(doc(db, "users", uid, "wishlists", listId));
 }
 
-/** Add or merge an item under users/{uid}/wishlists/{listId}/items/{isbn} */
-export async function addItem(uid, listId, book) {
-  const itemRef = doc(db, "users", uid, "wishlists", listId, "items", book.isbn);
-  await setDoc(
-    itemRef,
-    { ...book, addedAt: serverTimestamp(), updatedAt: serverTimestamp() },
-    { merge: true }
-  );
+/** Upsert item at key = book.isbn (if you want a different key, pass it as id) */
+export async function addItem(uid, listId, book, idMaybe) {
+  const itemId = idMaybe || String(book.isbn || crypto.randomUUID?.() || Math.random().toString(36).slice(2));
+  const itemRef = doc(db, "users", uid, "wishlists", listId, "items", itemId);
+  await setDoc(itemRef, {
+    ...book,
+    addedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  // bump list updatedAt
   await updateDoc(doc(db, "users", uid, "wishlists", listId), { updatedAt: serverTimestamp() });
 }
 
-/** Remove an item by ISBN */
-export async function removeItem(uid, listId, isbn) {
-  await deleteDoc(doc(db, "users", uid, "wishlists", listId, "items", isbn));
+/** Delete by *document id* (reliable). */
+export async function removeItemById(uid, listId, itemId) {
+  await deleteDoc(doc(db, "users", uid, "wishlists", listId, "items", itemId));
   await updateDoc(doc(db, "users", uid, "wishlists", listId), { updatedAt: serverTimestamp() });
 }
 
-/** Make a list public/private; when making public, creates/updates a mapping */
+/** Back-compat: delete by isbn or id (just forwards to removeItemById). */
+export async function removeItem(uid, listId, isbnOrId) {
+  return removeItemById(uid, listId, String(isbnOrId));
+}
+
+/** Toggle public share and return shareId (or null if made private) */
 export async function togglePublic(uid, listId, on) {
   const listRef = doc(db, "users", uid, "wishlists", listId);
   let shareId = null;
@@ -80,16 +83,15 @@ export async function togglePublic(uid, listId, on) {
     await setDoc(listRef, { isPublic: true, shareId, updatedAt: serverTimestamp() }, { merge: true });
     await setDoc(doc(db, "publicWishlists", shareId), { ownerUid: uid, listId, createdAt: serverTimestamp() });
   } else {
-    // read current shareId to clean up mapping (optional)
     const snap = await getDoc(listRef);
     shareId = snap.exists() ? snap.data()?.shareId || null : null;
     await setDoc(listRef, { isPublic: false, shareId: null, updatedAt: serverTimestamp() }, { merge: true });
-    // (optional) you could delete the mapping doc here, but keeping it is okay too
+    // (optional) delete the mapping doc here if you want to revoke the old shareId
   }
   return shareId;
 }
 
-/** Resolve a public shareId → { ownerUid, listId } or null */
+/** Resolve shareId → { ownerUid, listId } */
 export async function getPublicMapping(shareId) {
   const snap = await getDoc(doc(db, "publicWishlists", shareId));
   return snap.exists() ? snap.data() : null;
