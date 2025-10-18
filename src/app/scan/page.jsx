@@ -36,13 +36,12 @@ export default function Page() {
   const selectedListIdRef = useRef(null);
   const busyRef = useRef(false);
 
-  const [last, setLast] = useState("");     // last scanned digits (display)
-  const [status, setStatus] = useState(""); // status line
+  const [last, setLast] = useState("");
+  const [status, setStatus] = useState("");
 
-  // Keep refs in sync with state
   useEffect(() => { selectedListIdRef.current = selectedListId; }, [selectedListId]);
 
-  // 1) Auth + subscribe to user's lists
+  // Auth + subscribe to user's lists (run once)
   useEffect(() => {
     let stopLists = null;
     (async () => {
@@ -50,10 +49,7 @@ export default function Page() {
       if (!user?.uid) return;
       setUid(user.uid);
 
-      const qRef = query(
-        collection(db, "users", user.uid, "wishlists"),
-        orderBy("updatedAt", "desc")
-      );
+      const qRef = query(collection(db, "users", user.uid, "wishlists"), orderBy("updatedAt", "desc"));
       stopLists = onSnapshot(qRef, (snap) => {
         const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data()) }));
         setLists(arr);
@@ -64,17 +60,15 @@ export default function Page() {
       });
     })();
     return () => { if (stopLists) stopLists(); };
-    // no deps — runs once
   }, []);
 
-  // 2) Scanner setup — runs once; uses refs inside callback
+  // Scanner setup (run once)
   useEffect(() => {
     let stopped = false;
     let localControls = null;
 
     (async () => {
       try {
-        // Request camera first so labels populate on iOS
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: "environment" } },
           audio: false,
@@ -95,32 +89,20 @@ export default function Page() {
           async (result /*, err */) => {
             if (stopped || !result) return;
 
-            // Normalize to digits (ISBN/EAN)
             const digits = result.getText().replace(/\D/g, "");
             if (!digits) return;
 
-            // Always reflect last scanned code in UI
             setLast((prev) => (prev === digits ? prev : digits));
 
-            // Debounce inside busy ref
             if (busyRef.current) return;
             busyRef.current = true;
 
             setStatus("Looking up…");
-            console.log("Scanned:", digits);
-
-            // 3) Lookup book; if none, create a minimal item so the scan still saves
             let book = await lookupBook(digits);
             if (!book) {
-              book = {
-                isbn: digits,
-                title: `Scanned ISBN ${digits}`,
-                author: "",
-                image: "",
-              };
+              book = { isbn: digits, title: `Scanned ISBN ${digits}`, author: "", image: "" };
             }
 
-            // 4) Ensure auth
             const user = await ensureAuth();
             if (!user?.uid) {
               setStatus("Not signed in.");
@@ -128,7 +110,6 @@ export default function Page() {
               return;
             }
 
-            // 5) Ensure/choose a target list
             let targetListId = selectedListIdRef.current;
             if (!targetListId) {
               const name = `Visit — ${new Date().toLocaleDateString()}`;
@@ -145,7 +126,6 @@ export default function Page() {
               }
             }
 
-            // 6) Add to list
             try {
               await addItem(user.uid, targetListId, book);
               setStatus(`Added: ${book.title}`);
@@ -154,7 +134,6 @@ export default function Page() {
               console.error("addItem failed:", e);
               setStatus("Failed to add. Check rules/connection.");
             } finally {
-              // Small delay to reduce rapid re-adds of the same code
               setTimeout(() => { busyRef.current = false; }, 700);
             }
           }
@@ -172,19 +151,16 @@ export default function Page() {
       const stream = videoRef.current?.srcObject;
       if (stream) stream.getTracks().forEach((t) => t.stop());
     };
-    // no deps — run once
   }, [reader]);
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 760, margin: "0 auto" }}>
-      {/* Back/Home */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <button className="cc-btn-outline" onClick={() => history.back()}>← Back</button>
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Scan a Book</h1>
         <a className="cc-btn-outline" href="/">Home</a>
       </div>
 
-      {/* Camera */}
       <video
         ref={videoRef}
         autoPlay
@@ -193,11 +169,9 @@ export default function Page() {
         style={{ width: "100%", maxWidth: 540, borderRadius: 12, background: "#000" }}
       />
 
-      {/* Status */}
       <p style={{ marginTop: 12 }}>Last code: <strong>{last || "—"}</strong></p>
       <p style={{ marginTop: 6, color: "#555" }}>{status}</p>
 
-      {/* Current list indicator */}
       <div className="cc-card" style={{ marginTop: 12 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <span style={{ fontSize:12, opacity:.8 }}>Active list:</span>
