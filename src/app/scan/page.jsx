@@ -4,12 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { ensureAuth, db } from "@/lib/firebase";
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-} from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { addItem, createList } from "@/lib/wishlists";
 
 async function lookupBook(isbn) {
@@ -21,10 +16,11 @@ async function lookupBook(isbn) {
     return {
       isbn,
       title: info.title || "Unknown",
-      author: (info.authors && info.authors[0]) || "",
-      image: info.imageLinks?.thumbnail || "",
+      author: Array.isArray(info.authors) ? info.authors[0] || "" : "",
+      image: (info.imageLinks && (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail)) || "",
     };
-  } catch {
+  } catch (e) {
+    console.warn("lookupBook error:", e);
     return null;
   }
 }
@@ -37,10 +33,14 @@ export default function Page() {
   const [lists, setLists] = useState([]);
   const [selectedListId, setSelectedListId] = useState(null);
 
-  const [last, setLast] = useState("");      // last scanned digits (display)
-  const [status, setStatus] = useState("");  // status line
-  const [busy, setBusy] = useState(false);   // debounce while adding
-  const lastScanRef = useRef({ code: "", ts: 0 });
+  const selectedListIdRef = useRef(null);
+  const busyRef = useRef(false);
+
+  const [last, setLast] = useState("");     // last scanned digits (display)
+  const [status, setStatus] = useState(""); // status line
+
+  // Keep refs in sync with state
+  useEffect(() => { selectedListIdRef.current = selectedListId; }, [selectedListId]);
 
   // 1) Auth + subscribe to user's lists
   useEffect(() => {
@@ -57,19 +57,24 @@ export default function Page() {
       stopLists = onSnapshot(qRef, (snap) => {
         const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data()) }));
         setLists(arr);
-        if (!selectedListId && arr[0]) setSelectedListId(arr[0].id);
+        if (!selectedListIdRef.current && arr[0]) {
+          setSelectedListId(arr[0].id);
+          selectedListIdRef.current = arr[0].id;
+        }
       });
     })();
     return () => { if (stopLists) stopLists(); };
-  }, [selectedListId]);
+    // no deps — runs once
+  }, []);
 
-  // 2) Scanner setup (no NotFoundException import)
+  // 2) Scanner setup — runs once; uses refs inside callback
   useEffect(() => {
     let stopped = false;
     let localControls = null;
 
     (async () => {
       try {
+        // Request camera first so labels populate on iOS
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: "environment" } },
           audio: false,
@@ -79,9 +84,9 @@ export default function Page() {
         const devices = await BrowserMultiFormatReader.listVideoInputDevices();
         const backCam =
           devices.find((d) =>
-            d.label.toLowerCase().includes("back") ||
-            d.label.toLowerCase().includes("rear") ||
-            d.label.toLowerCase().includes("environment")
+            (d.label || "").toLowerCase().includes("back") ||
+            (d.label || "").toLowerCase().includes("rear") ||
+            (d.label || "").toLowerCase().includes("environment")
           ) || devices[0];
 
         localControls = await reader.decodeFromVideoDevice(
@@ -94,71 +99,81 @@ export default function Page() {
             const digits = result.getText().replace(/\D/g, "");
             if (!digits) return;
 
-            // Always show the last scanned code
-            setLast(digits);
+            // Always reflect last scanned code in UI
+            setLast((prev) => (prev === digits ? prev : digits));
 
-            // Debounce duplicate reads within 1.5s
-            const now = Date.now();
-            if (lastScanRef.current.code === digits && now - lastScanRef.current.ts < 1500) {
-              return;
-            }
-            lastScanRef.current = { code: digits, ts: now };
+            // Debounce inside busy ref
+            if (busyRef.current) return;
+            busyRef.current = true;
 
-            // Only continue if not already adding
-            if (busy) return;
-            setBusy(true);
             setStatus("Looking up…");
+            console.log("Scanned:", digits);
 
-            // 3) Lookup book
-            const book = await lookupBook(digits);
+            // 3) Lookup book; if none, create a minimal item so the scan still saves
+            let book = await lookupBook(digits);
             if (!book) {
-              setStatus("Not found");
-              setBusy(false);
-              return;
+              book = {
+                isbn: digits,
+                title: `Scanned ISBN ${digits}`,
+                author: "",
+                image: "",
+              };
             }
 
-            // 4) Ensure we have an auth UID
+            // 4) Ensure auth
             const user = await ensureAuth();
             if (!user?.uid) {
               setStatus("Not signed in.");
-              setBusy(false);
+              busyRef.current = false;
               return;
             }
 
-            // 5) Ensure a target list exists (auto-create if none)
-            let targetListId = selectedListId;
+            // 5) Ensure/choose a target list
+            let targetListId = selectedListIdRef.current;
             if (!targetListId) {
               const name = `Visit — ${new Date().toLocaleDateString()}`;
               setStatus("Creating a list…");
-              targetListId = await createList(user.uid, name);
-              setSelectedListId(targetListId);
+              try {
+                targetListId = await createList(user.uid, name);
+                setSelectedListId(targetListId);
+                selectedListIdRef.current = targetListId;
+              } catch (e) {
+                console.error("createList failed:", e);
+                setStatus("Could not create list. Check Firestore rules.");
+                busyRef.current = false;
+                return;
+              }
             }
 
             // 6) Add to list
             try {
               await addItem(user.uid, targetListId, book);
               setStatus(`Added: ${book.title}`);
+              console.log("Added to list", targetListId, book);
             } catch (e) {
-              console.error(e);
+              console.error("addItem failed:", e);
               setStatus("Failed to add. Check rules/connection.");
             } finally {
-              setBusy(false);
+              // Small delay to reduce rapid re-adds of the same code
+              setTimeout(() => { busyRef.current = false; }, 700);
             }
           }
         );
       } catch (err) {
-        console.error(err);
+        console.error("Camera error:", err);
         setStatus("Camera access denied or unavailable.");
       }
     })();
 
     return () => {
+      stopped = true;
       try { localControls && localControls.stop(); } catch {}
       try { reader && reader.reset(); } catch {}
       const stream = videoRef.current?.srcObject;
       if (stream) stream.getTracks().forEach((t) => t.stop());
     };
-  }, [reader, selectedListId, busy]);
+    // no deps — run once
+  }, [reader]);
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 760, margin: "0 auto" }}>
