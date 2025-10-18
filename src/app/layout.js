@@ -1,14 +1,15 @@
-﻿export const metadata = {
-  title: "Cozy & Content",
-  description: "Wishlist & scanner",
-};
-
+﻿// src/app/layout.js
 import "./globals.css";
+
+export const metadata = {
+  title: "Cozy & Content Wishlists",
+  description: "Scan barcodes and build/share wishlists at Cozy & Content",
+};
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0 }}>{children}</body>
+      <body>{children}</body>
     </html>
   );
 }

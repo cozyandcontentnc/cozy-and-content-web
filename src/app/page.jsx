@@ -1,64 +1,141 @@
-﻿"use client";
+﻿// src/app/page.jsx
+"use client";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ensureAuth, db, auth } from "@/lib/firebase"; // or "../lib/firebase"
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
-import { libroSearchUrl } from "@/lib/libro"; // optional; remove if not added yet
+import { ensureAuth, db } from "@/lib/firebase";
+import {
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+  doc,
+  getCountFromServer,
+  deleteDoc,
+} from "firebase/firestore";
+import { createList, renameList } from "@/lib/wishlists";
 
 export default function Page() {
   const [uid, setUid] = useState(null);
-  const [items, setItems] = useState([]);
+  const [lists, setLists] = useState([]); // [{id, name, isPublic, shareId, updatedAt, count?}]
+  const [loadingCounts, setLoadingCounts] = useState(false);
 
-  // ensure auth, then store uid
+  // Ensure auth, load wishlists
   useEffect(() => {
     let active = true;
     (async () => {
       const user = await ensureAuth();
-      if (active) setUid(user.uid);
+      if (!active || !user?.uid) return;
+      setUid(user.uid);
+
+      const qRef = query(
+        collection(db, "users", user.uid, "wishlists"),
+        orderBy("updatedAt", "desc")
+      );
+      const unsub = onSnapshot(qRef, async (snap) => {
+        const base = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setLists(base);
+
+        // (Optional) fetch counts for each list (subcollection items)
+        setLoadingCounts(true);
+        try {
+          const withCounts = await Promise.all(
+            base.map(async (l) => {
+              try {
+                const coll = collection(db, "users", user.uid, "wishlists", l.id, "items");
+                const agg = await getCountFromServer(coll);
+                return { ...l, count: agg.data().count || 0 };
+              } catch {
+                return { ...l, count: undefined };
+              }
+            })
+          );
+          setLists(withCounts);
+        } finally {
+          setLoadingCounts(false);
+        }
+      });
+
+      return () => unsub();
     })();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // subscribe once uid is known
-  useEffect(() => {
+  async function onCreate() {
     if (!uid) return;
-    const q = query(collection(db, "wishlists", uid, "items"), orderBy("addedAt", "desc"));
-    const unsub = onSnapshot(q, (snap) => setItems(snap.docs.map(d => d.data())));
-    return unsub;
-  }, [uid]);
+    const name = prompt("New list name:", `Visit — ${new Date().toLocaleDateString()}`);
+    if (!name) return;
+    await createList(uid, name);
+  }
+
+  async function onRename(listId, currentName) {
+    if (!uid) return;
+    const next = prompt("Rename list:", currentName);
+    if (next && next.trim()) {
+      await renameList(uid, listId, next.trim());
+    }
+  }
+
+  async function onDelete(listId) {
+    if (!uid) return;
+    const ok = confirm("Delete this list (and its items)? This cannot be undone.");
+    if (!ok) return;
+    // Delete the list doc; (subcollection cleanup can be added later with a CF or batch)
+    await deleteDoc(doc(db, "users", uid, "wishlists", listId));
+  }
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1>Cozy & Content — My Wishlist</h1>
+    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Cozy & Content — Wishlists</h1>
+        <div style={{ display: "flex", gap: 8 }}>
+          <a href="/scan" className="cc-btn" style={{ textDecoration: "none" }}>📷 Scan a Book</a>
+          <button className="cc-btn-outline" onClick={onCreate}>+ New List</button>
+        </div>
+      </header>
 
-      <div style={{ display: "flex", gap: 12, margin: "12px 0" }}>
-        <Link href="/scan" style={{ textDecoration: "none" }}>
-          <button>📷 Scan a Book</button>
-        </Link>
-      </div>
-
-      {items.length === 0 ? (
-        <p>No books yet. Tap <strong>Scan a Book</strong> to start your wishlist.</p>
+      {lists.length === 0 ? (
+        <div className="cc-card" style={{ marginTop: 12 }}>
+          <p style={{ margin: 0 }}>
+            No lists yet. Click <strong>+ New List</strong> or start with <strong>📷 Scan a Book</strong>.
+          </p>
+        </div>
       ) : (
-        <ul style={{ listStyle: "none", padding: 0 }}>
-          {items.map((it) => (
-            <li key={it.isbn} style={{ display: "flex", gap: 12, padding: 12, borderBottom: "1px solid #eee" }}>
-              {it.coverUrl && <img src={it.coverUrl} width={60} height={90} alt={it.title} />}
-              <div>
-                <div style={{ fontWeight: 700 }}>{it.title}</div>
-                <div>{(it.authors || []).join(", ")}</div>
-                <div style={{ opacity: 0.7, fontSize: 12 }}>ISBN: {it.isbn}</div>
-                {libroSearchUrl && (
-                  <div style={{ marginTop: 6 }}>
-                    <a href={libroSearchUrl(it.title, (it.authors || [])[0])} target="_blank" rel="noreferrer">
-                      🎧 Gift on Libro.fm
+        <div style={{ display: "grid", gap: 12 }}>
+          {lists.map((l) => (
+            <div key={l.id} className="cc-card" style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <Link href={`/list/${l.id}`} className="cc-link" style={{ fontSize: 18, fontWeight: 700 }}>
+                    {l.name || "Untitled List"}
+                  </Link>
+                  <span style={{ fontSize: 12, opacity: 0.7 }}>
+                    {loadingCounts
+                      ? "…"
+                      : typeof l.count === "number"
+                      ? `${l.count} item${l.count === 1 ? "" : "s"}`
+                      : ""}
+                  </span>
+                  {l.isPublic && l.shareId ? (
+                    <a href={`/s/${l.shareId}`} target="_blank" className="cc-link" style={{ fontSize: 12 }}>
+                      Public link
                     </a>
-                  </div>
-                )}
+                  ) : null}
+                </div>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Link href={`/list/${l.id}`} className="cc-btn-outline" style={{ textDecoration: "none" }}>
+                    Open
+                  </Link>
+                  <button className="cc-btn-outline" onClick={() => onRename(l.id, l.name)}>Rename</button>
+                  <button className="cc-btn-outline" onClick={() => onDelete(l.id)}>Delete</button>
+                </div>
               </div>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </main>
   );
