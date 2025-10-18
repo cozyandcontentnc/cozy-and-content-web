@@ -15,7 +15,7 @@ import { libroSearchUrl } from "@/lib/libro";
 // import { createList } from "@/lib/wishlists";
 
 const LOGO_W = 220; // 👈 change these to resize your logo
-const LOGO_H = 88;  // keep the aspect ratio visually consistent
+const LOGO_H = 120;  // keep the aspect ratio visually consistent
 
 export default function Page() {
   const [uid, setUid] = useState(null);
