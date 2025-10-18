@@ -47,6 +47,7 @@ export default function BottomBar() {
     >
       <Tab href="/" label="Home" icon="🏠" active={active("/")} />
       <Tab href="/scan" label="Scan" icon="📷" active={active("/scan")} />
+      <Tab href="/requests" label="Requests" icon="📨" active={active("/requests")} />
       <Tab href="/settings" label="Settings" icon="⚙️" active={active("/settings")} />
     </nav>
   );

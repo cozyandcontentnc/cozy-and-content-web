@@ -13,9 +13,10 @@ import {
   onSnapshot,
   orderBy,
   query,
+  updateDoc,
 } from "firebase/firestore";
 import { removeItemById, togglePublic, renameList } from "@/lib/wishlists";
-import { libroSearchUrl } from "@/lib/libro"; // only one helper needed now
+import { libroSearchUrl } from "@/lib/libro";
 
 export default function ListPage() {
   const { id } = useParams();
@@ -26,6 +27,7 @@ export default function ListPage() {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("");
 
+  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u?.uid) router.replace("/account/login");
@@ -34,6 +36,7 @@ export default function ListPage() {
     return () => unsub();
   }, [router]);
 
+  // subscribe to list + items (keep doc ids!)
   useEffect(() => {
     if (!uid || !id) return;
 
@@ -50,9 +53,9 @@ export default function ListPage() {
       collection(db, "users", uid, "wishlists", id, "items"),
       orderBy("addedAt", "desc")
     );
-    const unsub = onSnapshot(qRef, (snap) =>
-      setItems(snap.docs.map((d) => ({ id: d.id, ...(d.data()) })))
-    );
+    const unsub = onSnapshot(qRef, (snap) => {
+      setItems(snap.docs.map((d) => ({ id: d.id, ...(d.data()) })));
+    });
     return () => unsub();
   }, [uid, id]);
 
@@ -88,6 +91,24 @@ export default function ListPage() {
     }
   }
 
+  function copy(text) {
+    navigator.clipboard?.writeText(text).then(
+      () => setStatus("Link copied"),
+      () => setStatus("Could not copy link")
+    );
+    setTimeout(() => setStatus(""), 1500);
+  }
+
+  async function togglePurchased(item) {
+    try {
+      await updateDoc(doc(db, "users", uid, "wishlists", id, "items", item.id), {
+        purchased: !item.purchased,
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -104,7 +125,15 @@ export default function ListPage() {
               {list.isPublic ? "Make Private" : "Make Public"}
             </button>
             {list.isPublic && list.shareId && (
-              <a className="cc-link" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">Public link</a>
+              <>
+                <a className="cc-link" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">Public link</a>
+                <button
+                  className="cc-btn-outline"
+                  onClick={() => copy(`${location.origin}/s/${list.shareId}`)}
+                >
+                  Copy list link
+                </button>
+              </>
             )}
           </div>
           <a className="cc-btn-outline" href="/scan">+ Scan more</a>
@@ -118,17 +147,46 @@ export default function ListPage() {
       ) : (
         <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
           {items.map((it) => (
-            <li key={it.id} className="cc-card" style={{ display:"flex", gap:12, alignItems:"center" }}>
+            <li
+              key={it.id}
+              className="cc-card"
+              style={{
+                display:"flex",
+                gap:12,
+                alignItems:"center",
+                opacity: it.purchased ? 0.6 : 1,
+              }}
+            >
               {it.image && <img src={it.image} width={60} height={90} alt={it.title} />}
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700 }}>{it.title}</div>
+                <div style={{ fontWeight: 700 }}>
+                  {it.title} {it.purchased ? "— Purchased" : ""}
+                </div>
                 <div style={{ opacity: .8 }}>{it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : "")}</div>
-                <div style={{ opacity: .6, fontSize: 12 }}>ID: {it.id}{it.isbn ? ` • ISBN: ${it.isbn}` : ""}</div>
+                <div style={{ opacity: .6, fontSize: 12 }}>
+                  ID: {it.id}{it.isbn ? ` • ISBN: ${it.isbn}` : ""}
+                </div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  {/* Deep link to Libro.fm (by title/author) */}
                   <a className="cc-btn-outline" href={libroSearchUrl(it.title, it.author)} target="_blank" rel="noreferrer">
                     🎧 Find on Libro.fm
                   </a>
+
+                  {/* Share single book (only if list is public & has shareId) */}
+                  {list?.isPublic && list?.shareId && (
+                    <button
+                      className="cc-btn-outline"
+                      onClick={() => copy(`${location.origin}/s/${list.shareId}?item=${it.id}`)}
+                    >
+                      Share this book
+                    </button>
+                  )}
+
+                  {/* Owner controls */}
+                  <button className="cc-btn-outline" onClick={() => togglePurchased(it)}>
+                    {it.purchased ? "Mark as unpurchased" : "Mark as purchased"}
+                  </button>
                   <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>🗑️ Delete</button>
                 </div>
               </div>
