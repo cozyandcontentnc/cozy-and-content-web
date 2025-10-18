@@ -1,109 +1,122 @@
-﻿// src/app/page.jsx
-"use client";
-export const dynamic = "force-dynamic";
+﻿"use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { auth, db } from "@/lib/firebase";
-import { onAuthStateChanged } from "firebase/auth";
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-  getCountFromServer,
-} from "firebase/firestore";
+import { ensureAuth, db } from "@/lib/firebase"; // or "../lib/firebase"
+import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import { libroSearchUrl } from "@/lib/libro"; // optional; remove if not added yet
 
-export default function HomePage() {
+export default function Page() {
   const [uid, setUid] = useState(null);
-  const [isAuthed, setIsAuthed] = useState(false);
-  const [lists, setLists] = useState([]);
-  const [loadingCounts, setLoadingCounts] = useState(false);
+  const [items, setItems] = useState([]);
 
+  // ensure auth, then store uid
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setIsAuthed(!!u);
-      setUid(u?.uid || null);
-    });
-    return () => unsub();
+    let active = true;
+    (async () => {
+      const user = await ensureAuth();
+      if (active) setUid(user.uid);
+    })();
+    return () => { active = false; };
   }, []);
 
+  // subscribe once uid is known
   useEffect(() => {
     if (!uid) return;
-    const qRef = query(collection(db, "users", uid, "wishlists"), orderBy("updatedAt", "desc"));
-    const unsub = onSnapshot(qRef, async (snap) => {
-      const base = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setLists(base);
-
-      // fetch counts for each list (server aggregate)
-      setLoadingCounts(true);
-      try {
-        const withCounts = await Promise.all(
-          base.map(async (l) => {
-            try {
-              const coll = collection(db, "users", uid, "wishlists", l.id, "items");
-              const agg = await getCountFromServer(coll);
-              return { ...l, count: agg.data().count || 0 };
-            } catch {
-              return { ...l, count: undefined };
-            }
-          })
-        );
-        setLists(withCounts);
-      } finally {
-        setLoadingCounts(false);
-      }
-    });
-    return () => unsub();
+    const q = query(collection(db, "wishlists", uid, "items"), orderBy("addedAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => setItems(snap.docs.map(d => d.data())));
+    return unsub;
   }, [uid]);
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Cozy & Content — Wishlists</h1>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Link href="/scan" className="cc-btn" style={{ textDecoration: "none" }}>📷 Scan a Book</Link>
-          {!isAuthed && (
-            <>
-              <a href="/account/login" className="cc-btn-outline">Log in</a>
-              <a href="/account/signup" className="cc-btn-outline">Sign up</a>
-            </>
-          )}
-        </div>
-      </header>
+    <main style={{ padding: 24, fontFamily: "system-ui", textAlign: "center" }}>
+      {/* Add Logo Image */}
+      <div style={{ marginBottom: 20 }}>
+        <img
+          src="/path-to-your-logo.png" // Adjust with the actual path of your logo image
+          alt="Cozy & Content"
+          style={{
+            width: "150px", // Adjust size accordingly
+            height: "auto",
+            margin: "0 auto",
+            display: "block",
+          }}
+        />
+      </div>
 
-      {!uid && (
-        <div className="cc-card">You’re not signed in. Log in to view and save your wishlists.</div>
-      )}
+      {/* Welcome Message */}
+      <h1 style={{ fontSize: "2rem", fontWeight: 700, margin: "0 0 20px" }}>
+        Welcome to Cozy & Content!
+      </h1>
+      <p style={{ fontSize: "1rem", color: "#555", marginBottom: "30px" }}>
+        Browse your wishlist or add new books to order today.
+      </p>
 
-      {uid && lists.length === 0 && (
-        <div className="cc-card">No lists yet. Open <strong>Scan</strong> and add your first book — we’ll create a list for you.</div>
-      )}
+      {/* Navigation Buttons */}
+      <div style={{ display: "flex", justifyContent: "center", gap: "20px" }}>
+        <button
+          style={{
+            padding: "12px 20px",
+            fontSize: "16px",
+            backgroundColor: "#0070f3",
+            color: "white",
+            border: "none",
+            borderRadius: "6px",
+            cursor: "pointer",
+          }}
+        >
+          View Wishlist
+        </button>
 
-      {uid && lists.length > 0 && (
-        <div style={{ display: "grid", gap: 12 }}>
-          {lists.map((l) => (
-            <div key={l.id} className="cc-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display:"flex", gap:8, alignItems:"baseline", flexWrap:"wrap" }}>
-                <Link href={`/list/${l.id}`} className="cc-link" style={{ fontSize: 18, fontWeight: 700 }}>
-                  {l.name || "Untitled List"}
-                </Link>
-                <span style={{ fontSize: 12, opacity: 0.7 }}>
-                  {loadingCounts ? "…" : typeof l.count === "number" ? `${l.count} item${l.count === 1 ? "" : "s"}` : ""}
-                </span>
-                {l.isPublic && l.shareId && (
-                  <a href={`/s/${l.shareId}`} className="cc-link" target="_blank" style={{ fontSize: 12 }}>
-                    Public link
-                  </a>
-                )}
-              </div>
-              <Link href={`/list/${l.id}`} className="cc-btn-outline" style={{ textDecoration: "none" }}>
-                Open
-              </Link>
-            </div>
-          ))}
-        </div>
-      )}
+        <button
+          style={{
+            padding: "12px 20px",
+            fontSize: "16px",
+            backgroundColor: "#0070f3",
+            color: "white",
+            border: "none",
+            borderRadius: "6px",
+            cursor: "pointer",
+          }}
+        >
+          Scan a Book
+        </button>
+      </div>
+
+      {/* Wishlist Items */}
+      <div style={{ marginTop: "40px" }}>
+        {items.length === 0 ? (
+          <p>No books yet. Tap "Scan a Book" to start your wishlist.</p>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0 }}>
+            {items.map((it, index) => (
+              <li
+                key={index}
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  padding: 12,
+                  borderBottom: "1px solid #ddd",
+                  alignItems: "center",
+                }}
+              >
+                {it.coverUrl && <img src={it.coverUrl} width={60} height={90} alt={it.title} />}
+                <div>
+                  <div style={{ fontWeight: 700 }}>{it.title}</div>
+                  <div>{(it.authors || []).join(", ")}</div>
+                  <div style={{ opacity: 0.7, fontSize: 12 }}>ISBN: {it.isbn}</div>
+                  {libroSearchUrl && (
+                    <div style={{ marginTop: 6 }}>
+                      <a href={libroSearchUrl(it.title, (it.authors || [])[0])} target="_blank" rel="noreferrer">
+                        🎧 Find on Libro.fm
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </main>
   );
 }
