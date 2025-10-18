@@ -8,6 +8,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyA9YJl8mP-ILswqVHH7QVNdZo4-jvk_RTs",
   authDomain: "cozy-and-content.firebaseapp.com",
   projectId: "cozy-and-content",
+  // Correct storage bucket host:
   storageBucket: "cozy-and-content.firebasestorage.app",
   messagingSenderId: "8334047711",
   appId: "1:8334047711:web:c3f4d583d2fad90ff9ac6a",
