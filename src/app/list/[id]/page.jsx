@@ -17,6 +17,7 @@ import {
 } from "firebase/firestore";
 import { removeItemById, togglePublic, renameList } from "@/lib/wishlists";
 import { libroSearchUrl } from "@/lib/libro";
+import { copy } from "@/lib/utils"; // You may need to create the copy function
 
 export default function ListPage() {
   const { id } = useParams();
@@ -27,7 +28,6 @@ export default function ListPage() {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("");
 
-  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u?.uid) router.replace("/account/login");
@@ -36,7 +36,6 @@ export default function ListPage() {
     return () => unsub();
   }, [router]);
 
-  // subscribe to list + items (keep doc ids!)
   useEffect(() => {
     if (!uid || !id) return;
 
@@ -91,22 +90,13 @@ export default function ListPage() {
     }
   }
 
+  // Copy function
   function copy(text) {
     navigator.clipboard?.writeText(text).then(
       () => setStatus("Link copied"),
       () => setStatus("Could not copy link")
     );
     setTimeout(() => setStatus(""), 1500);
-  }
-
-  async function togglePurchased(item) {
-    try {
-      await updateDoc(doc(db, "users", uid, "wishlists", id, "items", item.id), {
-        purchased: !item.purchased,
-      });
-    } catch (e) {
-      console.error(e);
-    }
   }
 
   return (
@@ -147,16 +137,7 @@ export default function ListPage() {
       ) : (
         <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
           {items.map((it) => (
-            <li
-              key={it.id}
-              className="cc-card"
-              style={{
-                display:"flex",
-                gap:12,
-                alignItems:"center",
-                opacity: it.purchased ? 0.6 : 1,
-              }}
-            >
+            <li key={it.id} className="cc-card" style={{ display:"flex", gap:12, alignItems:"center" }}>
               {it.image && <img src={it.image} width={60} height={90} alt={it.title} />}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700 }}>
@@ -168,12 +149,7 @@ export default function ListPage() {
                 </div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  {/* Deep link to Libro.fm (by title/author) */}
-                  <a className="cc-btn-outline" href={libroSearchUrl(it.title, it.author)} target="_blank" rel="noreferrer">
-                    🎧 Find on Libro.fm
-                  </a>
-
-                  {/* Share single book (only if list is public & has shareId) */}
+                  {/* Share entire list */}
                   {list?.isPublic && list?.shareId && (
                     <button
                       className="cc-btn-outline"
@@ -183,10 +159,11 @@ export default function ListPage() {
                     </button>
                   )}
 
-                  {/* Owner controls */}
-                  <button className="cc-btn-outline" onClick={() => togglePurchased(it)}>
-                    {it.purchased ? "Mark as unpurchased" : "Mark as purchased"}
-                  </button>
+                  {/* Find book on Libro.fm */}
+                  <a className="cc-btn-outline" href={libroSearchUrl(it.title, it.author)} target="_blank" rel="noreferrer">
+                    🎧 Find on Libro.fm
+                  </a>
+
                   <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>🗑️ Delete</button>
                 </div>
               </div>
