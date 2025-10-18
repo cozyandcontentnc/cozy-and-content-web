@@ -16,6 +16,7 @@ export default function ListPage() {
 
   const [meta, setMeta] = useState({ name: "Wishlist", isPublic: false, shareId: null });
   const [items, setItems] = useState([]);
+  const dynamic = "force-dynamic";
 
   useEffect(() => {
     let stopMeta = null;

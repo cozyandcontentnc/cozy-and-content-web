@@ -12,6 +12,7 @@ export default function SettingsPage() {
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const dynamic = "force-dynamic";
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {

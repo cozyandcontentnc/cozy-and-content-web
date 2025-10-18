@@ -24,7 +24,6 @@ async function lookupBook(isbn) {
     return null;
   }
 }
-
 export default function Page() {
   const videoRef = useRef(null);
   const [reader] = useState(() => new BrowserMultiFormatReader());
@@ -38,6 +37,7 @@ export default function Page() {
 
   const [last, setLast] = useState("");
   const [status, setStatus] = useState("");
+  const dynamic = "force-dynamic";
 
   useEffect(() => { selectedListIdRef.current = selectedListId; }, [selectedListId]);
 

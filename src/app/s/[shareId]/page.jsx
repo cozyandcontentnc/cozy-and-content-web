@@ -10,7 +10,8 @@ export default function PublicList({ params }) {
   const { shareId } = params;
   const [items, setItems] = useState(null);
   const [notFound, setNotFound] = useState(false);
-
+  const dynamic = "force-dynamic";
+  
   useEffect(() => {
     let alive = true;
     (async () => {
