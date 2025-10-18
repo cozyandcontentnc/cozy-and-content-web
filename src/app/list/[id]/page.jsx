@@ -15,10 +15,10 @@ import {
   query,
 } from "firebase/firestore";
 import { removeItemById, togglePublic, renameList } from "@/lib/wishlists";
-import { libroSearchByIsbn, libroSearchUrl } from "@/lib/libro";
+import { libroSearchUrl } from "@/lib/libro"; // only one helper needed now
 
 export default function ListPage() {
-  const { id } = useParams(); // wishlist id
+  const { id } = useParams();
   const router = useRouter();
 
   const [uid, setUid] = useState(null);
@@ -26,7 +26,6 @@ export default function ListPage() {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("");
 
-  // auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u?.uid) router.replace("/account/login");
@@ -35,7 +34,6 @@ export default function ListPage() {
     return () => unsub();
   }, [router]);
 
-  // subscribe to list + items (keep doc ids!)
   useEffect(() => {
     if (!uid || !id) return;
 
@@ -52,9 +50,9 @@ export default function ListPage() {
       collection(db, "users", uid, "wishlists", id, "items"),
       orderBy("addedAt", "desc")
     );
-    const unsub = onSnapshot(qRef, (snap) => {
-      setItems(snap.docs.map((d) => ({ id: d.id, ...(d.data()) })));
-    });
+    const unsub = onSnapshot(qRef, (snap) =>
+      setItems(snap.docs.map((d) => ({ id: d.id, ...(d.data()) })))
+    );
     return () => unsub();
   }, [uid, id]);
 
@@ -128,13 +126,8 @@ export default function ListPage() {
                 <div style={{ opacity: .6, fontSize: 12 }}>ID: {it.id}{it.isbn ? ` • ISBN: ${it.isbn}` : ""}</div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  {it.isbn && (
-                    <a className="cc-btn-outline" href={libroSearchByIsbn(it.isbn)} target="_blank" rel="noreferrer">
-                      🎧 Find on Libro.fm
-                    </a>
-                  )}
                   <a className="cc-btn-outline" href={libroSearchUrl(it.title, it.author)} target="_blank" rel="noreferrer">
-                    🔎 Search by title/author
+                    🎧 Find on Libro.fm
                   </a>
                   <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>🗑️ Delete</button>
                 </div>
