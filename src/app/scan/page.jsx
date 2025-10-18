@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { BrowserMultiFormatReader, NotFoundException } from "@zxing/browser";
+import { BrowserMultiFormatReader } from "@zxing/browser";
 import { ensureAuth, db } from "@/lib/firebase";
 import {
   collection,
@@ -63,7 +63,7 @@ export default function Page() {
     return () => { if (stopLists) stopLists(); };
   }, [selectedListId]);
 
-  // 2) Scanner setup
+  // 2) Scanner setup (no NotFoundException import)
   useEffect(() => {
     let stopped = false;
     let localControls = null;
@@ -87,13 +87,8 @@ export default function Page() {
         localControls = await reader.decodeFromVideoDevice(
           backCam?.deviceId,
           videoRef.current,
-          async (result, err) => {
-            if (stopped) return;
-            if (err && !(err instanceof NotFoundException)) {
-              // non-not-found errors
-              return;
-            }
-            if (!result) return;
+          async (result /*, err */) => {
+            if (stopped || !result) return;
 
             // Normalize to digits (ISBN/EAN)
             const digits = result.getText().replace(/\D/g, "");
