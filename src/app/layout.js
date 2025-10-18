@@ -1,5 +1,6 @@
 ﻿// src/app/layout.js
 import "./globals.css";
+import AppShell from "@/components/AppShell";
 
 export const metadata = {
   title: "Cozy & Content Wishlists",
@@ -9,7 +10,9 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AppShell>{children}</AppShell>
+      </body>
     </html>
   );
 }
