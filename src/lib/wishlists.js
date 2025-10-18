@@ -1,77 +1,88 @@
-// lib/wishlists.js
-"use client";
-
-import { db } from "./db";
+// src/lib/wishlists.js
+import { db } from "./firebase";
 import {
-  addDoc, collection, serverTimestamp, updateDoc, doc, deleteDoc, setDoc, getDoc,
+  serverTimestamp,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  getDoc,
+  collection,
 } from "firebase/firestore";
 
-/** Small helper to create a short random shareId without new deps */
-function makeShareId(len = 10) {
-  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let out = "";
-  const arr = new Uint32Array(len);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(arr);
-    for (let i = 0; i < len; i++) out += chars[arr[i] % chars.length];
-  } else {
-    for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return out;
-}
-
-/** Create a new wishlist under users/{uid}/wishlists */
-export async function createList(uid, name) {
-  const ref = await addDoc(collection(db, "users", uid, "wishlists"), {
+/**
+ * Ensure a list exists, returning its ID. (If id provided, it’s returned.)
+ */
+export async function createList(uid, name = "New List", idMaybe) {
+  const id = idMaybe || crypto.randomUUID();
+  const ref = doc(db, "users", uid, "wishlists", id);
+  const snap = await getDoc(ref);
+  const base = {
     name,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     isPublic: false,
     shareId: null,
-  });
-  return ref.id;
-}
-
-export async function renameList(uid, listId, name) {
-  await updateDoc(doc(db, "users", uid, "wishlists", listId), {
-    name,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-export async function deleteList(uid, listId) {
-  await deleteDoc(doc(db, "users", uid, "wishlists", listId));
-}
-
-/** Add an item under users/{uid}/wishlists/{listId}/items */
-export async function addItem(uid, listId, item) {
-  await addDoc(collection(db, "users", uid, "wishlists", listId, "items"), {
-    ...item,
-    qty: item.qty ?? 1,
-    addedAt: serverTimestamp(),
-  });
-}
-
-/** Toggle public sharing; creates publicWishlists/{shareId} mapping */
-export async function togglePublic(uid, listId, on) {
-  const shareId = on ? makeShareId(10) : null;
-  await updateDoc(doc(db, "users", uid, "wishlists", listId), {
-    isPublic: on,
-    shareId,
-    updatedAt: serverTimestamp(),
-  });
-  if (on && shareId) {
-    await setDoc(doc(db, "publicWishlists", shareId), {
-      ownerUid: uid,
-      listId,
-      createdAt: serverTimestamp(),
-    });
+  };
+  if (snap.exists()) {
+    // Only touch updatedAt if it exists
+    await updateDoc(ref, { updatedAt: serverTimestamp() });
+  } else {
+    await setDoc(ref, base, { merge: true });
   }
-  return shareId;
+  return id;
 }
 
-/** Resolve public shareId -> { ownerUid, listId } */
-export async function getPublicMapping(shareId) {
-  const snap = await getDoc(doc(db, "publicWishlists", shareId));
-  return snap.exists() ? snap.data() : null;
+/**
+ * Add (or merge) an item under users/{uid}/wishlists/{listId}/items/{isbn}
+ * Book: { isbn, title, author, image }
+ */
+export async function addItem(uid, listId, book) {
+  const itemRef = doc(db, "users", uid, "wishlists", listId, "items", book.isbn);
+  await setDoc(
+    itemRef,
+    {
+      ...book,
+      addedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+  // bump list updatedAt
+  const listRef = doc(db, "users", uid, "wishlists", listId);
+  await updateDoc(listRef, { updatedAt: serverTimestamp() });
+}
+
+/**
+ * Remove an item. Also bumps list updatedAt.
+ */
+export async function removeItem(uid, listId, isbn) {
+  const itemRef = doc(db, "users", uid, "wishlists", listId, "items", isbn);
+  await deleteDoc(itemRef);
+  const listRef = doc(db, "users", uid, "wishlists", listId);
+  await updateDoc(listRef, { updatedAt: serverTimestamp() });
+}
+
+/**
+ * (Optional) rename list
+ */
+export async function renameList(uid, listId, newName) {
+  const listRef = doc(db, "users", uid, "wishlists", listId);
+  await updateDoc(listRef, { name: newName, updatedAt: serverTimestamp() });
+}
+
+/**
+ * (Optional) delete list and its items (client-side recursive delete not included here).
+ * If you need full recursive delete, do it via a Cloud Function or Admin SDK.
+ */
+export async function deleteList(uid, listId) {
+  const listRef = doc(db, "users", uid, "wishlists", listId);
+  await deleteDoc(listRef);
+}
+
+/**
+ * (Optional) path helper for items collection
+ */
+export function itemsCollectionPath(uid, listId) {
+  return collection(db, "users", uid, "wishlists", listId, "items");
 }
