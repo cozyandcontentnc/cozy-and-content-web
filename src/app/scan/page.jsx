@@ -1,15 +1,10 @@
-﻿"use client";
+﻿// src/app/scan/page.jsx
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { ensureAuth, db } from "@/lib/firebase";
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-} from "firebase/firestore";
-import { addItem, createList } from "@/lib/wishlists";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 
 async function lookupBook(isbn) {
   try {
@@ -20,169 +15,171 @@ async function lookupBook(isbn) {
     return {
       isbn,
       title: info.title || "Unknown",
-      author: (info.authors && info.authors[0]) || "",
-      image: info.imageLinks?.thumbnail || "",
+      authors: info.authors || [],
+      coverUrl: info.imageLinks?.thumbnail || "",
     };
   } catch {
     return null;
   }
 }
 
-export default function Page() {
+export default function ScanPage() {
   const videoRef = useRef(null);
   const [reader] = useState(() => new BrowserMultiFormatReader());
   const [uid, setUid] = useState(null);
-  const [lists, setLists] = useState([]);
-  const [selectedListId, setSelectedListId] = useState(null);
-  const [last, setLast] = useState("");      // last scanned digits (display)
-  const [status, setStatus] = useState("");  // status line
-  const [busy, setBusy] = useState(false);   // debounce while adding
-  const lastScanRef = useRef({ code: "", ts: 0 });
 
+  const [lastCode, setLastCode] = useState("");
+  const [status, setStatus] = useState("Tap Start to enable the camera");
+  const [running, setRunning] = useState(false);
+  const lastScanRef = useRef({ code: "", t: 0 });
+
+  // Make sure we’re signed in before saving
   useEffect(() => {
-    let stopLists = null;
+    let active = true;
     (async () => {
       const user = await ensureAuth();
-      if (!user?.uid) return;
-      setUid(user.uid);
-
-      const qRef = query(
-        collection(db, "users", user.uid, "wishlists"),
-        orderBy("updatedAt", "desc")
-      );
-      stopLists = onSnapshot(qRef, (snap) => {
-        const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data()) }));
-        setLists(arr);
-        if (!selectedListId && arr[0]) setSelectedListId(arr[0].id);
-      });
+      if (active) setUid(user?.uid || null);
     })();
-    return () => { if (stopLists) stopLists(); };
-  }, [selectedListId]);
+    return () => { active = false; };
+  }, []);
+
+  async function startScanner() {
+    if (running) return;
+    setStatus("Starting camera…");
+
+    try {
+      // Request the environment/back camera when possible
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          // Some browsers (Chrome Android) honor zoom/focus hints:
+          // advanced: [{ focusMode: "continuous" }] // not widely supported, safe to omit
+        },
+        audio: false,
+      });
+
+      // attach stream to <video>
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        // user-gesture policies—explicitly play
+        try { await videoRef.current.play(); } catch {}
+      }
+
+      // Pick a back camera if we can find one
+      const devices = await BrowserMultiFormatReader.listVideoInputDevices();
+      const backCam =
+        devices.find(d =>
+          (d.label || "").toLowerCase().includes("back") ||
+          (d.label || "").toLowerCase().includes("rear") ||
+          (d.label || "").toLowerCase().includes("environment")
+        ) || devices[0];
+
+      // Start decoding
+      await reader.decodeFromVideoDevice(
+        backCam?.deviceId ?? undefined,
+        videoRef.current,
+        async (result /*, err */) => {
+          if (!result) return;
+          const raw = result.getText();
+          const digits = (raw || "").replace(/\D/g, "");
+          if (!digits) return;
+
+          // show last
+          setLastCode(digits);
+
+          // debounce same code for 1.5s
+          const now = Date.now();
+          if (lastScanRef.current.code === digits && now - lastScanRef.current.t < 1500) return;
+          lastScanRef.current = { code: digits, t: now };
+
+          setStatus("Looking up…");
+          const book = await lookupBook(digits);
+          if (!book) {
+            setStatus("Not found");
+            return;
+          }
+
+          if (!uid) {
+            setStatus("Not signed in.");
+            return;
+          }
+
+          // IMPORTANT: save where your Home screen reads:
+          // wishlists/{uid}/items/{isbn}
+          try {
+            await setDoc(
+              doc(db, "wishlists", uid, "items", book.isbn),
+              { ...book, addedAt: serverTimestamp() },
+              { merge: true }
+            );
+            setStatus(`Added: ${book.title}`);
+          } catch (e) {
+            console.error(e);
+            setStatus("Failed to save to Firestore.");
+          }
+        }
+      );
+
+      setRunning(true);
+      setStatus("Point camera at a barcode");
+    } catch (err) {
+      console.error(err);
+      // Common reasons: blocked permission, not https on mobile, no camera
+      setStatus("Camera access denied or unavailable.");
+      setRunning(false);
+    }
+  }
+
+  function stopScanner() {
+    try { reader.reset(); } catch {}
+    const stream = videoRef.current?.srcObject;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    setRunning(false);
+    setStatus("Scanner stopped");
+  }
 
   useEffect(() => {
-    const requestCameraPermission = async () => {
-      try {
-        // Check if camera permissions are granted
-        const permissionStatus = await navigator.permissions.query({ name: "camera" });
-
-        if (permissionStatus.state !== "granted") {
-          const cameraStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: "environment" } },
-            audio: false,
-          });
-          if (videoRef.current) videoRef.current.srcObject = cameraStream;
-
-          permissionStatus.state = "granted"; // Update to granted after first request
-        }
-
-        // If permission is granted, proceed
-        if (permissionStatus.state === "granted") {
-          const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-          const backCam =
-            devices.find((d) =>
-              d.label.toLowerCase().includes("back") ||
-              d.label.toLowerCase().includes("rear") ||
-              d.label.toLowerCase().includes("environment")
-            ) || devices[0];
-
-          await reader.decodeFromVideoDevice(
-            backCam?.deviceId,
-            videoRef.current,
-            async (result /*, err */) => {
-              if (!result) return;
-
-              // Normalize to digits (ISBN/EAN)
-              const digits = result.getText().replace(/\D/g, "");
-              if (!digits) return;
-
-              setLast(digits);
-
-              // Debounce duplicate reads within 1.5s
-              const now = Date.now();
-              if (lastScanRef.current.code === digits && now - lastScanRef.current.ts < 1500) {
-                return;
-              }
-              lastScanRef.current = { code: digits, ts: now };
-
-              // Only continue if not already adding
-              if (busy) return;
-              setBusy(true);
-              setStatus("Looking up…");
-
-              // Lookup book
-              const book = await lookupBook(digits);
-              if (!book) {
-                setStatus("Not found");
-                setBusy(false);
-                return;
-              }
-
-              // Ensure we have an auth UID
-              const user = await ensureAuth();
-              if (!user?.uid) {
-                setStatus("Not signed in.");
-                setBusy(false);
-                return;
-              }
-
-              // Ensure a target list exists (auto-create if none)
-              let targetListId = selectedListId;
-              if (!targetListId) {
-                const name = `Visit — ${new Date().toLocaleDateString()}`;
-                setStatus("Creating a list…");
-                targetListId = await createList(user.uid, name);
-                setSelectedListId(targetListId);
-              }
-
-              // Add to list
-              try {
-                await addItem(user.uid, targetListId, book);
-                setStatus(`Added: ${book.title}`);
-              } catch (e) {
-                console.error(e);
-                setStatus("Failed to add. Check rules/connection.");
-              } finally {
-                setBusy(false);
-              }
-            }
-          );
-        } else {
-          setStatus("Camera access is required to scan books.");
-        }
-      } catch (err) {
-        console.error(err);
-        setStatus("Camera access denied or unavailable.");
-      }
+    return () => {
+      // Cleanup on unmount
+      stopScanner();
     };
-
-    requestCameraPermission();
-  }, [reader, selectedListId, busy]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 760, margin: "0 auto" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+    <main style={{ padding: 16, maxWidth: 760, margin: "0 auto", fontFamily: "system-ui" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <button className="cc-btn-outline" onClick={() => history.back()}>← Back</button>
-        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Scan a Book</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Scan a Book</h1>
         <a className="cc-btn-outline" href="/">Home</a>
       </div>
 
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        playsInline
-        style={{ width: "100%", maxWidth: 540, borderRadius: 12, background: "#000" }}
-      />
-      <p style={{ marginTop: 12 }}>Last code: <strong>{last || "—"}</strong></p>
-      <p style={{ marginTop: 6, color: "#555" }}>{status}</p>
-
-      <div className="cc-card" style={{ marginTop: 12 }}>
-        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-          <span style={{ fontSize:12, opacity:.8 }}>Active list:</span>
-          <strong>
-            {lists.find(l => l.id === selectedListId)?.name || (lists[0]?.name ?? "Will create when you scan")}
-          </strong>
+      <div className="cc-card" style={{ display: "grid", gap: 8 }}>
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          style={{ width: "100%", aspectRatio: "3 / 4", maxWidth: 520, borderRadius: 12, background: "#000", margin: "0 auto" }}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+          {!running ? (
+            <button className="cc-btn" onClick={startScanner}>▶️ Start</button>
+          ) : (
+            <button className="cc-btn-outline" onClick={stopScanner}>⏹ Stop</button>
+          )}
+          <a className="cc-btn-outline" href="/scan">↻ Reset</a>
         </div>
+      </div>
+
+      <div className="cc-card" style={{ marginTop: 12, display: "grid", gap: 4 }}>
+        <div>Last code: <strong>{lastCode || "—"}</strong></div>
+        <div style={{ color: "#555" }}>{status}</div>
+        {!location.protocol.startsWith("https") && (
+          <div style={{ color: "#a33", fontSize: 12 }}>
+            Tip: On iOS/Android, camera requires HTTPS (Vercel is fine).
+          </div>
+        )}
       </div>
     </main>
   );
