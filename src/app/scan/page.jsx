@@ -27,112 +27,168 @@ async function lookupBook(isbn) {
 
 export default function ScanPage() {
   const videoRef = useRef(null);
-  const [uid, setUid] = useState(null);
+  const rafRef = useRef(null);
+  const detectorRef = useRef(null);
+  const zxingRef = useRef(null);
 
-  // UI state
+  const [uid, setUid] = useState(null);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Tap Start to enable the camera");
   const [lastCode, setLastCode] = useState("");
   const [firestoreError, setFirestoreError] = useState("");
-  const [isSecureContext, setIsSecureContext] = useState(true);
+  const [devices, setDevices] = useState([]);
+  const [deviceId, setDeviceId] = useState("");
 
-  // Flash overlay state (fallback / also nice UI affordance)
-  const [flash, setFlash] = useState(null); // null | "detect" | "save"
-  const flashTimerRef = useRef(null);
+  const lastScanRef = useRef({ code: "", t: 0 });
 
-  function triggerFlash(kind = "detect") {
-    // kind: "detect" (white) or "save" (green)
-    setFlash(kind);
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = setTimeout(() => setFlash(null), 120); // quick flash
-  }
-
-  function cleanupFlash() {
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    setFlash(null);
-  }
-
-  // ZXing with hints (EAN/UPC only → better accuracy for books)
-  const zxingRef = useRef(null);
+  // Build ZXing reader w/ format hints (ISBNs are EAN-13, sometimes UPC-A)
   if (!zxingRef.current) {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-      BarcodeFormat.EAN_13, // ISBN (978/979)
+      BarcodeFormat.EAN_13,
       BarcodeFormat.EAN_8,
       BarcodeFormat.UPC_A,
       BarcodeFormat.UPC_E,
     ]);
-    zxingRef.current = new BrowserMultiFormatReader(hints, 300);
+    zxingRef.current = new BrowserMultiFormatReader(hints, 250);
   }
 
-  const lastScanRef = useRef({ code: "", t: 0 });
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const proto = window.location?.protocol || "";
-      const host = window.location?.hostname || "";
-      const https = proto === "https:";
-      const isLocal = host === "localhost" || host === "127.0.0.1";
-      setIsSecureContext(https || isLocal);
-    }
-  }, []);
-
-  // Ensure we’re signed in
+  // Ensure we’re signed in (allow anonymous for scan-and-go)
   useEffect(() => {
     let active = true;
     (async () => {
-      const user = await ensureAuth({ allowAnonymous: true }); // allow anon for scan-and-go
+      const user = await ensureAuth({ allowAnonymous: true });
       if (active) setUid(user?.uid || null);
     })();
     return () => { active = false; };
   }, []);
 
-  function vibrate(ms = 50) {
+  // Enumerate cameras (labels appear after permission is granted)
+  async function refreshDevices() {
     try {
-      if (typeof window !== "undefined" && "vibrate" in navigator) {
-        navigator.vibrate(ms);
-        return true;
+      const list = await BrowserMultiFormatReader.listVideoInputDevices();
+      setDevices(list);
+      const back =
+        list.find((d) =>
+          (d.label || "").toLowerCase().includes("back") ||
+          (d.label || "").toLowerCase().includes("rear") ||
+          (d.label || "").toLowerCase().includes("environment")
+        ) || list[0];
+      if (back && !deviceId) setDeviceId(back.deviceId);
+    } catch (e) {
+      console.warn("Could not list cameras:", e);
+    }
+  }
+
+  function stopStreams() {
+    try { zxingRef.current?.reset(); } catch {}
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    const stream = videoRef.current?.srcObject;
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+  }
+
+  async function startScanner() {
+    if (running) return;
+    setStatus("Starting camera…");
+    setFirestoreError("");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          facingMode: deviceId ? undefined : { ideal: "environment" },
+        },
+        audio: false,
+      });
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        try { await videoRef.current.play(); } catch {}
       }
-    } catch {}
-    return false;
+
+      await refreshDevices();
+
+      // Try native BarcodeDetector first
+      const NativeDetector = globalThis.BarcodeDetector;
+      if (NativeDetector) {
+        try {
+          detectorRef.current = new NativeDetector({
+            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"], // allow a few extras
+          });
+        } catch {
+          detectorRef.current = null;
+        }
+      }
+
+      if (detectorRef.current) {
+        setStatus("Point barcode inside the frame");
+        setRunning(true);
+
+        const loop = async () => {
+          if (!detectorRef.current || !videoRef.current) return;
+          try {
+            const results = await detectorRef.current.detect(videoRef.current);
+            if (results && results.length) {
+              const raw = results[0]?.rawValue || "";
+              if (raw) handleDetected(raw);
+            }
+          } catch (e) {
+            // ignore frame errors
+          }
+          rafRef.current = requestAnimationFrame(loop);
+        };
+        rafRef.current = requestAnimationFrame(loop);
+      } else {
+        // Fallback to ZXing stream callback
+        await zxingRef.current.decodeFromVideoDevice(
+          deviceId || undefined,
+          videoRef.current,
+          (result /*, err */) => {
+            if (!result) return;
+            handleDetected(result.getText());
+          }
+        );
+        setStatus("Point barcode inside the frame");
+        setRunning(true);
+      }
+    } catch (err) {
+      console.error("Camera failed:", err);
+      setStatus("Camera access denied or unavailable.");
+      setRunning(false);
+    }
   }
 
-  function onFeedbackDetect() {
-    // Vibrate briefly OR flash if not available
-    if (!vibrate(35)) triggerFlash("detect");
-  }
-
-  function onFeedbackSaved() {
-    // Stronger haptic OR green flash if not available
-    if (!vibrate(90)) triggerFlash("save");
+  function stopScanner() {
+    stopStreams();
+    setRunning(false);
+    setStatus("Scanner stopped");
   }
 
   function handleDetected(raw) {
     const digits = (raw || "").replace(/\D/g, "");
     if (!digits) return;
 
-    setLastCode(digits);
-
+    // Debounce repeats for 1.2s
     const now = Date.now();
     if (lastScanRef.current.code === digits && now - lastScanRef.current.t < 1200) return;
     lastScanRef.current = { code: digits, t: now };
 
-    // Likely barcode lengths for books/retail
+    // Likely EAN/UPC lengths
     if (![8, 12, 13].includes(digits.length)) return;
 
-    onFeedbackDetect(); // 🔔 feedback on detection
+    setLastCode(digits);
     saveBook(digits);
   }
 
   async function saveBook(isbnDigits) {
-    setFirestoreError("");
     setStatus("Looking up…");
+    setFirestoreError("");
 
     const book = await lookupBook(isbnDigits);
     if (!book) { setStatus("Not found"); return; }
 
     if (!uid) {
-      setStatus("Not signed in. Please log in.");
+      setStatus("Not signed in.");
       setFirestoreError("auth/no-user");
       return;
     }
@@ -144,7 +200,6 @@ export default function ScanPage() {
         { merge: true }
       );
       setStatus(`Added: ${book.title}`);
-      onFeedbackSaved(); // ✅ stronger feedback on successful save
     } catch (e) {
       console.error("Firestore write failed:", e);
       setStatus("Failed to save to Firestore.");
@@ -152,61 +207,18 @@ export default function ScanPage() {
     }
   }
 
-  async function startScanner() {
-    if (running) return;
-    setStatus("Starting camera…");
-    setFirestoreError("");
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      });
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        try { await videoRef.current.play(); } catch {}
-      }
-
-      await zxingRef.current.decodeFromVideoDevice(
-        undefined, // let zxing pick based on facingMode
-        videoRef.current,
-        (result /*, err */) => {
-          if (!result) return;
-          handleDetected(result.getText());
-        }
-      );
-
-      setRunning(true);
-      setStatus("Point camera at a barcode");
-    } catch (err) {
-      console.error("Camera failed:", err);
-      setStatus("Camera access denied or unavailable.");
-      setRunning(false);
-    }
-  }
-
-  function stopScanner() {
-    try { zxingRef.current?.reset(); } catch {}
-    const stream = videoRef.current?.srcObject;
-    if (stream) stream.getTracks().forEach((t) => t.stop());
-    setRunning(false);
-    setStatus("Scanner stopped");
-    cleanupFlash();
-  }
-
+  // Clean up on unmount
   useEffect(() => {
     return () => { stopScanner(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Manual entry for debugging
+  // Manual entry (debug)
   const [manual, setManual] = useState("");
-  async function testManualAdd(e) {
+  function onManualSubmit(e) {
     e.preventDefault();
     const digits = manual.replace(/\D/g, "");
-    if (!digits) return;
-    handleDetected(digits);
+    if (digits) handleDetected(digits);
   }
 
   return (
@@ -218,8 +230,29 @@ export default function ScanPage() {
       </div>
 
       <div className="cc-card" style={{ display: "grid", gap: 8 }}>
-        {/* Video wrapper so we can position the flash overlay on top */}
-        <div style={{ position: "relative", width: "100%" }}>
+        {/* Camera picker if multiple */}
+        {devices.length > 1 && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 14, opacity: 0.8 }}>Camera:</label>
+            <select
+              value={deviceId}
+              onChange={(e) => setDeviceId(e.target.value)}
+              style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc" }}
+            >
+              {devices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || "Camera"}
+                </option>
+              ))}
+            </select>
+            <button className="cc-btn-outline" onClick={() => { stopScanner(); startScanner(); }}>
+              Switch
+            </button>
+          </div>
+        )}
+
+        {/* Video with overlay guide */}
+        <div style={{ position: "relative", width: "100%", display: "grid", placeItems: "center" }}>
           <video
             ref={videoRef}
             autoPlay
@@ -228,32 +261,72 @@ export default function ScanPage() {
             style={{
               width: "100%",
               aspectRatio: "3 / 4",
-              maxWidth: 520,
+              maxWidth: 540,
               borderRadius: 12,
               background: "#000",
               display: "block",
-              margin: "0 auto"
             }}
           />
 
-          {/* Flash overlay (fallback and visual feedback) */}
-          {flash && (
+          {/* Finder frame: corners + animated scan line */}
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "grid",
+              placeItems: "center",
+              pointerEvents: "none",
+            }}
+          >
             <div
               style={{
-                position: "absolute",
-                inset: 0,
-                margin: "0 auto",
-                maxWidth: 520,
-                borderRadius: 12,
-                pointerEvents: "none",
-                // white for detect, green for save
-                background: flash === "save"
-                  ? "rgba(54, 92, 74, 0.35)"  // cozy green
-                  : "rgba(255, 255, 255, 0.6)",
-                animation: "ccFlash 140ms ease-out",
+                position: "relative",
+                width: "80%",
+                maxWidth: 420,
               }}
-            />
-          )}
+            >
+              {/* The box */}
+              <div
+                style={{
+                  width: "100%",
+                  height: 220,
+                  margin: "0 auto",
+                  borderRadius: 12,
+                  boxShadow: "0 0 0 20000px rgba(0,0,0,0.4) inset",
+                  border: "2px solid rgba(255,255,255,0.85)",
+                }}
+              />
+              {/* Corner accents */}
+              {["tl","tr","bl","br"].map((pos) => (
+                <span
+                  key={pos}
+                  style={{
+                    position: "absolute",
+                    width: 26,
+                    height: 26,
+                    borderColor: "rgba(255,255,255,0.95)",
+                    ...(pos === "tl" && { top: -2, left: -2, borderTopWidth: 4, borderLeftWidth: 4, borderStyle: "solid" }),
+                    ...(pos === "tr" && { top: -2, right: -2, borderTopWidth: 4, borderRightWidth: 4, borderStyle: "solid" }),
+                    ...(pos === "bl" && { bottom: -2, left: -2, borderBottomWidth: 4, borderLeftWidth: 4, borderStyle: "solid" }),
+                    ...(pos === "br" && { bottom: -2, right: -2, borderBottomWidth: 4, borderRightWidth: 4, borderStyle: "solid" }),
+                  }}
+                />
+              ))}
+              {/* Animated scan line */}
+              <span
+                style={{
+                  position: "absolute",
+                  left: 0, right: 0,
+                  top: 0,
+                  height: 2,
+                  background: "rgba(207,172,120,0.95)", // warm accent
+                  boxShadow: "0 0 12px rgba(207,172,120,0.9)",
+                  animation: "ccScanLine 1400ms linear infinite",
+                }}
+              />
+            </div>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
@@ -274,19 +347,18 @@ export default function ScanPage() {
             Firestore error: <code>{firestoreError}</code>
           </div>
         )}
-        {!isSecureContext && (
-          <div style={{ color: "#a33", fontSize: 12 }}>
-            Tip: On phones, the camera needs HTTPS (Vercel is OK). Plain LAN IPs won’t work.
-          </div>
-        )}
+        <div style={{ color: "#666", fontSize: 12 }}>
+          Tip: Hold ~5–8 inches away, center barcode in the box, good lighting helps.
+        </div>
       </div>
 
+      {/* Manual fallback for quick testing */}
       <div className="cc-card" style={{ marginTop: 12 }}>
-        <form onSubmit={testManualAdd} style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+        <form onSubmit={onManualSubmit} style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
           <input
             value={manual}
             onChange={(e) => setManual(e.target.value)}
-            placeholder="Type ISBN/UPC to test saving"
+            placeholder="Type ISBN/UPC"
             inputMode="numeric"
             pattern="[0-9]*"
             style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #ccc", width: 240 }}
@@ -295,12 +367,13 @@ export default function ScanPage() {
         </form>
       </div>
 
-      {/* Flash keyframes (scoped inline) */}
+      {/* Scoped animations */}
       <style jsx>{`
-        @keyframes ccFlash {
-          0%   { opacity: 0; }
-          1%   { opacity: 1; }
-          100% { opacity: 0; }
+        @keyframes ccScanLine {
+          0%   { transform: translateY(0); opacity: 0.3; }
+          10%  { opacity: 1; }
+          90%  { opacity: 1; }
+          100% { transform: translateY(218px); opacity: 0.3; }
         }
       `}</style>
     </main>
