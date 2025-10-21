@@ -5,7 +5,19 @@ import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { BarcodeFormat, DecodeHintType } from "@zxing/library";
 import { ensureAuth, db } from "@/lib/firebase";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  getDocs,
+  limit
+} from "firebase/firestore";
 
 async function lookupBook(isbn) {
   try {
@@ -32,6 +44,12 @@ export default function ScanPage() {
   const zxingRef = useRef(null);
 
   const [uid, setUid] = useState(null);
+
+  // Lists
+  const [lists, setLists] = useState([]);
+  const [selectedListId, setSelectedListId] = useState("");
+
+  // UI
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Tap Start to enable the camera");
   const [lastCode, setLastCode] = useState("");
@@ -41,7 +59,7 @@ export default function ScanPage() {
 
   const lastScanRef = useRef({ code: "", t: 0 });
 
-  // Build ZXing reader w/ format hints (ISBNs are EAN-13, sometimes UPC-A)
+  // Build ZXing reader with EAN/UPC hints (best for ISBNs)
   if (!zxingRef.current) {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [
@@ -53,17 +71,61 @@ export default function ScanPage() {
     zxingRef.current = new BrowserMultiFormatReader(hints, 250);
   }
 
-  // Ensure we’re signed in (allow anonymous for scan-and-go)
+  // Ensure we’re signed in (anon ok for scan-and-go)
   useEffect(() => {
     let active = true;
     (async () => {
       const user = await ensureAuth({ allowAnonymous: true });
-      if (active) setUid(user?.uid || null);
+      if (!active) return;
+      setUid(user?.uid || null);
     })();
     return () => { active = false; };
   }, []);
 
-  // Enumerate cameras (labels appear after permission is granted)
+  // Load lists, auto-create one if none
+  useEffect(() => {
+    if (!uid) return;
+
+    const listsCol = collection(db, "users", uid, "wishlists");
+    const qRef = query(listsCol, orderBy("updatedAt", "desc"));
+    const unsub = onSnapshot(qRef, async (snap) => {
+      const arr = snap.docs.map(d => ({ id: d.id, ...(d.data()) }));
+      setLists(arr);
+
+      if (!arr.length) {
+        // If truly no lists yet, create a dated one
+        setStatus("Creating your first wishlist…");
+        try {
+          const name = `Visit — ${new Date().toLocaleDateString()}`;
+          const ref = await addDoc(listsCol, {
+            name,
+            isPublic: false,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          setSelectedListId(ref.id);
+          setStatus("List created. You can start scanning.");
+        } catch (e) {
+          console.error(e);
+          setStatus("Couldn’t create a wishlist.");
+        }
+        return;
+      }
+
+      // Select current if not chosen yet
+      if (!selectedListId) {
+        setSelectedListId(arr[0].id);
+      } else if (!arr.find(l => l.id === selectedListId)) {
+        // Selected list got deleted; fall back
+        setSelectedListId(arr[0].id);
+      }
+    });
+
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid]);
+
+  // Enumerate cameras
   async function refreshDevices() {
     try {
       const list = await BrowserMultiFormatReader.listVideoInputDevices();
@@ -108,12 +170,12 @@ export default function ScanPage() {
 
       await refreshDevices();
 
-      // Try native BarcodeDetector first
+      // Try native detector first
       const NativeDetector = globalThis.BarcodeDetector;
       if (NativeDetector) {
         try {
           detectorRef.current = new NativeDetector({
-            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"], // allow a few extras
+            formats: ["ean_13", "ean_8", "upc_a", "upc_e"],
           });
         } catch {
           detectorRef.current = null;
@@ -121,7 +183,7 @@ export default function ScanPage() {
       }
 
       if (detectorRef.current) {
-        setStatus("Point barcode inside the frame");
+        setStatus("Center the barcode in the box");
         setRunning(true);
 
         const loop = async () => {
@@ -132,14 +194,12 @@ export default function ScanPage() {
               const raw = results[0]?.rawValue || "";
               if (raw) handleDetected(raw);
             }
-          } catch (e) {
-            // ignore frame errors
-          }
+          } catch {}
           rafRef.current = requestAnimationFrame(loop);
         };
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        // Fallback to ZXing stream callback
+        // ZXing fallback
         await zxingRef.current.decodeFromVideoDevice(
           deviceId || undefined,
           videoRef.current,
@@ -148,7 +208,7 @@ export default function ScanPage() {
             handleDetected(result.getText());
           }
         );
-        setStatus("Point barcode inside the frame");
+        setStatus("Center the barcode in the box");
         setRunning(true);
       }
     } catch (err) {
@@ -168,7 +228,7 @@ export default function ScanPage() {
     const digits = (raw || "").replace(/\D/g, "");
     if (!digits) return;
 
-    // Debounce repeats for 1.2s
+    // Debounce duplicates
     const now = Date.now();
     if (lastScanRef.current.code === digits && now - lastScanRef.current.t < 1200) return;
     lastScanRef.current = { code: digits, t: now };
@@ -178,6 +238,33 @@ export default function ScanPage() {
 
     setLastCode(digits);
     saveBook(digits);
+  }
+
+  async function ensureActiveList() {
+    if (!uid) return null;
+
+    // If selected present, good
+    if (selectedListId) return selectedListId;
+
+    // Else try to find most recent list
+    const qRef = query(collection(db, "users", uid, "wishlists"), orderBy("updatedAt", "desc"), limit(1));
+    const snap = await getDocs(qRef);
+    if (!snap.empty) {
+      const id = snap.docs[0].id;
+      setSelectedListId(id);
+      return id;
+    }
+
+    // Else create one
+    const name = `Visit — ${new Date().toLocaleDateString()}`;
+    const ref = await addDoc(collection(db, "users", uid, "wishlists"), {
+      name,
+      isPublic: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    setSelectedListId(ref.id);
+    return ref.id;
   }
 
   async function saveBook(isbnDigits) {
@@ -194,11 +281,29 @@ export default function ScanPage() {
     }
 
     try {
+      // Ensure we have a list to save into
+      const listId = await ensureActiveList();
+
+      // Save into per-list structure (for lists screens)
+      if (listId) {
+        await setDoc(
+          doc(db, "users", uid, "wishlists", listId, "items", book.isbn),
+          { ...book, addedAt: serverTimestamp() },
+          { merge: true }
+        );
+        // Touch list updatedAt
+        await updateDoc(doc(db, "users", uid, "wishlists", listId), {
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      // Also save to legacy single-list path so Home continues to see items
       await setDoc(
         doc(db, "wishlists", uid, "items", book.isbn),
         { ...book, addedAt: serverTimestamp() },
         { merge: true }
       );
+
       setStatus(`Added: ${book.title}`);
     } catch (e) {
       console.error("Firestore write failed:", e);
@@ -207,29 +312,47 @@ export default function ScanPage() {
     }
   }
 
-  // Clean up on unmount
+  // Manual entry (real add, not debug)
+  const [manualIsbn, setManualIsbn] = useState("");
+  function onManualSubmit(e) {
+    e.preventDefault();
+    const digits = manualIsbn.replace(/\D/g, "");
+    if (!digits) return;
+    handleDetected(digits);
+    setManualIsbn("");
+  }
+
+  // Cleanup on unmount
   useEffect(() => {
     return () => { stopScanner(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Manual entry (debug)
-  const [manual, setManual] = useState("");
-  function onManualSubmit(e) {
-    e.preventDefault();
-    const digits = manual.replace(/\D/g, "");
-    if (digits) handleDetected(digits);
-  }
-
   return (
-    <main style={{ padding: 16, maxWidth: 760, margin: "0 auto", fontFamily: "system-ui" }}>
+    <main style={{ padding: 16, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <button className="cc-btn-outline" onClick={() => history.back()}>← Back</button>
         <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Scan a Book</h1>
         <a className="cc-btn-outline" href="/">Home</a>
       </div>
 
-      <div className="cc-card" style={{ display: "grid", gap: 8 }}>
+      {/* Active list chooser */}
+      <div className="cc-card" style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ fontSize: 14, opacity: 0.8 }}>Active list:</span>
+          <select
+            value={selectedListId}
+            onChange={(e) => setSelectedListId(e.target.value)}
+            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", minWidth: 160 }}
+          >
+            {!lists.length && <option value="">(creating…)</option>}
+            {lists.map(l => <option key={l.id} value={l.id}>{l.name || "Wishlist"}</option>)}
+          </select>
+        </div>
+        <div style={{ color: "#666", fontSize: 12 }}>Scans will be added here.</div>
+      </div>
+
+      <div className="cc-card" style={{ display: "grid", gap: 10 }}>
         {/* Camera picker if multiple */}
         {devices.length > 1 && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
@@ -240,9 +363,7 @@ export default function ScanPage() {
               style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc" }}
             >
               {devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || "Camera"}
-                </option>
+                <option key={d.deviceId} value={d.deviceId}>{d.label || "Camera"}</option>
               ))}
             </select>
             <button className="cc-btn-outline" onClick={() => { stopScanner(); startScanner(); }}>
@@ -251,7 +372,7 @@ export default function ScanPage() {
           </div>
         )}
 
-        {/* Video with overlay guide */}
+        {/* Video with smaller size + finder frame */}
         <div style={{ position: "relative", width: "100%", display: "grid", placeItems: "center" }}>
           <video
             ref={videoRef}
@@ -260,15 +381,14 @@ export default function ScanPage() {
             playsInline
             style={{
               width: "100%",
+              maxWidth: 360,        // 👈 smaller camera window
               aspectRatio: "3 / 4",
-              maxWidth: 540,
               borderRadius: 12,
               background: "#000",
               display: "block",
             }}
           />
-
-          {/* Finder frame: corners + animated scan line */}
+          {/* Finder frame overlay */}
           <div
             aria-hidden
             style={{
@@ -279,22 +399,15 @@ export default function ScanPage() {
               pointerEvents: "none",
             }}
           >
-            <div
-              style={{
-                position: "relative",
-                width: "80%",
-                maxWidth: 420,
-              }}
-            >
-              {/* The box */}
+            <div style={{ position: "relative", width: "90%", maxWidth: 340 }}>
               <div
                 style={{
                   width: "100%",
-                  height: 220,
+                  height: 160,      // 👈 shorter guide box
                   margin: "0 auto",
                   borderRadius: 12,
-                  boxShadow: "0 0 0 20000px rgba(0,0,0,0.4) inset",
-                  border: "2px solid rgba(255,255,255,0.85)",
+                  boxShadow: "0 0 0 20000px rgba(0,0,0,0.42) inset",
+                  border: "2px solid rgba(255,255,255,0.9)",
                 }}
               />
               {/* Corner accents */}
@@ -303,8 +416,8 @@ export default function ScanPage() {
                   key={pos}
                   style={{
                     position: "absolute",
-                    width: 26,
-                    height: 26,
+                    width: 24,
+                    height: 24,
                     borderColor: "rgba(255,255,255,0.95)",
                     ...(pos === "tl" && { top: -2, left: -2, borderTopWidth: 4, borderLeftWidth: 4, borderStyle: "solid" }),
                     ...(pos === "tr" && { top: -2, right: -2, borderTopWidth: 4, borderRightWidth: 4, borderStyle: "solid" }),
@@ -320,9 +433,9 @@ export default function ScanPage() {
                   left: 0, right: 0,
                   top: 0,
                   height: 2,
-                  background: "rgba(207,172,120,0.95)", // warm accent
+                  background: "rgba(207,172,120,0.95)",
                   boxShadow: "0 0 12px rgba(207,172,120,0.9)",
-                  animation: "ccScanLine 1400ms linear infinite",
+                  animation: "ccScanLine 1200ms linear infinite",
                 }}
               />
             </div>
@@ -348,32 +461,32 @@ export default function ScanPage() {
           </div>
         )}
         <div style={{ color: "#666", fontSize: 12 }}>
-          Tip: Hold ~5–8 inches away, center barcode in the box, good lighting helps.
+          Tip: Hold ~5–8 inches away, center the barcode in the box, and use good lighting.
         </div>
       </div>
 
-      {/* Manual fallback for quick testing */}
+      {/* Manual ISBN entry (real add) */}
       <div className="cc-card" style={{ marginTop: 12 }}>
-        <form onSubmit={onManualSubmit} style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+        <form onSubmit={onManualSubmit} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, maxWidth: 420, margin: "0 auto" }}>
           <input
-            value={manual}
-            onChange={(e) => setManual(e.target.value)}
-            placeholder="Type ISBN/UPC"
+            value={manualIsbn}
+            onChange={(e) => setManualIsbn(e.target.value)}
+            placeholder="Enter ISBN / UPC"
             inputMode="numeric"
             pattern="[0-9]*"
-            style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #ccc", width: 240 }}
+            required
+            style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #ccc" }}
           />
-          <button className="cc-btn-outline" type="submit">Add Manually</button>
+          <button className="cc-btn" type="submit">Add ISBN</button>
         </form>
       </div>
 
-      {/* Scoped animations */}
       <style jsx>{`
         @keyframes ccScanLine {
-          0%   { transform: translateY(0); opacity: 0.3; }
+          0%   { transform: translateY(0); opacity: 0.35; }
           10%  { opacity: 1; }
           90%  { opacity: 1; }
-          100% { transform: translateY(218px); opacity: 0.3; }
+          100% { transform: translateY(158px); opacity: 0.35; }
         }
       `}</style>
     </main>
