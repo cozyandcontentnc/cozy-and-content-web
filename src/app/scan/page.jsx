@@ -9,16 +9,17 @@ import {
   addDoc,
   collection,
   doc,
+  getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
-  getDocs,
-  limit
 } from "firebase/firestore";
 
+// --- Google Books lookup ---
 async function lookupBook(isbn) {
   try {
     const r = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
@@ -31,8 +32,7 @@ async function lookupBook(isbn) {
       authors: info.authors || [],
       coverUrl: info.imageLinks?.thumbnail || "",
     };
-  } catch (e) {
-    console.error("Lookup failed:", e);
+  } catch {
     return null;
   }
 }
@@ -40,8 +40,9 @@ async function lookupBook(isbn) {
 export default function ScanPage() {
   const videoRef = useRef(null);
   const rafRef = useRef(null);
-  const detectorRef = useRef(null);
-  const zxingRef = useRef(null);
+  const detectorRef = useRef(null);      // native BarcodeDetector
+  const zxingRef = useRef(null);         // ZXing fallback
+  const canvasRef = useRef(null);        // offscreen ROI canvas for native detector
 
   const [uid, setUid] = useState(null);
 
@@ -57,9 +58,14 @@ export default function ScanPage() {
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState("");
 
+  // Finder box size (in CSS px, matches overlay)
+  const FINDER_WIDTH = 320;
+  const FINDER_HEIGHT = 140;
+
+  // Debounce
   const lastScanRef = useRef({ code: "", t: 0 });
 
-  // Build ZXing reader with EAN/UPC hints (best for ISBNs)
+  // ZXing with EAN/UPC hints
   if (!zxingRef.current) {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [
@@ -68,10 +74,10 @@ export default function ScanPage() {
       BarcodeFormat.UPC_A,
       BarcodeFormat.UPC_E,
     ]);
-    zxingRef.current = new BrowserMultiFormatReader(hints, 250);
+    zxingRef.current = new BrowserMultiFormatReader(hints, 200);
   }
 
-  // Ensure we’re signed in (anon ok for scan-and-go)
+  // Auth (allow anonymous for scan & go)
   useEffect(() => {
     let active = true;
     (async () => {
@@ -82,18 +88,17 @@ export default function ScanPage() {
     return () => { active = false; };
   }, []);
 
-  // Load lists, auto-create one if none
+  // Load lists & auto-create if needed
   useEffect(() => {
     if (!uid) return;
 
     const listsCol = collection(db, "users", uid, "wishlists");
     const qRef = query(listsCol, orderBy("updatedAt", "desc"));
     const unsub = onSnapshot(qRef, async (snap) => {
-      const arr = snap.docs.map(d => ({ id: d.id, ...(d.data()) }));
+      const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data()) }));
       setLists(arr);
 
       if (!arr.length) {
-        // If truly no lists yet, create a dated one
         setStatus("Creating your first wishlist…");
         try {
           const name = `Visit — ${new Date().toLocaleDateString()}`;
@@ -105,18 +110,15 @@ export default function ScanPage() {
           });
           setSelectedListId(ref.id);
           setStatus("List created. You can start scanning.");
-        } catch (e) {
-          console.error(e);
+        } catch {
           setStatus("Couldn’t create a wishlist.");
         }
         return;
       }
 
-      // Select current if not chosen yet
       if (!selectedListId) {
         setSelectedListId(arr[0].id);
-      } else if (!arr.find(l => l.id === selectedListId)) {
-        // Selected list got deleted; fall back
+      } else if (!arr.find((l) => l.id === selectedListId)) {
         setSelectedListId(arr[0].id);
       }
     });
@@ -137,9 +139,7 @@ export default function ScanPage() {
           (d.label || "").toLowerCase().includes("environment")
         ) || list[0];
       if (back && !deviceId) setDeviceId(back.deviceId);
-    } catch (e) {
-      console.warn("Could not list cameras:", e);
-    }
+    } catch {}
   }
 
   function stopStreams() {
@@ -149,16 +149,50 @@ export default function ScanPage() {
     if (stream) stream.getTracks().forEach((t) => t.stop());
   }
 
+  // Try to enable continuous autofocus + mild zoom (if supported)
+  async function tuneTrack(video) {
+    try {
+      const stream = video.srcObject;
+      const track = stream?.getVideoTracks?.()[0];
+      if (!track) return;
+      const caps = track.getCapabilities?.() || {};
+      const cons = track.getConstraints?.() || {};
+
+      const newConstraints = {};
+
+      // Ask for continuous focus if available
+      if (caps.focusMode && caps.focusMode.includes("continuous")) {
+        newConstraints.focusMode = "continuous";
+      }
+      // Mild zoom helps barcode clarity
+      if (typeof caps.zoom === "number") {
+        const target = Math.min(caps.zoom, 2.0); // up to 2x if available
+        newConstraints.zoom = target;
+      } else if (caps.zoom && caps.zoom.max) {
+        newConstraints.zoom = Math.min(caps.zoom.max, 2.0);
+      }
+
+      if (Object.keys(newConstraints).length) {
+        await track.applyConstraints({ advanced: [newConstraints] });
+      }
+    } catch {
+      // ignore if not supported
+    }
+  }
+
   async function startScanner() {
     if (running) return;
     setStatus("Starting camera…");
     setFirestoreError("");
 
     try {
+      // Request higher resolution to improve recognition speed/accuracy
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: deviceId ? { exact: deviceId } : undefined,
           facingMode: deviceId ? undefined : { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
         audio: false,
       });
@@ -166,11 +200,13 @@ export default function ScanPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         try { await videoRef.current.play(); } catch {}
+        // Tune autofocus/zoom if possible
+        tuneTrack(videoRef.current);
       }
 
       await refreshDevices();
 
-      // Try native detector first
+      // Native detector (faster) on cropped ROI
       const NativeDetector = globalThis.BarcodeDetector;
       if (NativeDetector) {
         try {
@@ -183,23 +219,50 @@ export default function ScanPage() {
       }
 
       if (detectorRef.current) {
-        setStatus("Center the barcode in the box");
         setRunning(true);
+        setStatus("Center the barcode in the box");
+
+        // Prepare ROI canvas
+        if (!canvasRef.current) {
+          canvasRef.current = document.createElement("canvas");
+        }
 
         const loop = async () => {
           if (!detectorRef.current || !videoRef.current) return;
+
+          const video = videoRef.current;
+          const vw = video.videoWidth || 1280;
+          const vh = video.videoHeight || 720;
+
+          // Compute ROI rect centered in the video, with same aspect as finder box
+          const scale = Math.min(vw / 360, vh / 480); // rough scaling reference
+          const roiW = Math.min(FINDER_WIDTH * (vw / video.clientWidth), vw * 0.9);
+          const roiH = Math.min(FINDER_HEIGHT * (vh / video.clientHeight), vh * 0.5);
+          const rx = Math.round((vw - roiW) / 2);
+          const ry = Math.round((vh - roiH) / 2);
+
+          const canvas = canvasRef.current;
+          canvas.width = roiW;
+          canvas.height = roiH;
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          ctx.drawImage(video, rx, ry, roiW, roiH, 0, 0, roiW, roiH);
+
           try {
-            const results = await detectorRef.current.detect(videoRef.current);
+            const results = await detectorRef.current.detect(canvas);
             if (results && results.length) {
               const raw = results[0]?.rawValue || "";
               if (raw) handleDetected(raw);
             }
-          } catch {}
+          } catch {
+            // ignore frame errors
+          }
+
+          // Run at ~30fps but detection each ~2 frames (smoother UI, less CPU)
           rafRef.current = requestAnimationFrame(loop);
         };
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        // ZXing fallback
+        // ZXing fallback: whole frame scanning (slower than ROI but reliable)
         await zxingRef.current.decodeFromVideoDevice(
           deviceId || undefined,
           videoRef.current,
@@ -208,8 +271,8 @@ export default function ScanPage() {
             handleDetected(result.getText());
           }
         );
-        setStatus("Center the barcode in the box");
         setRunning(true);
+        setStatus("Center the barcode in the box");
       }
     } catch (err) {
       console.error("Camera failed:", err);
@@ -224,16 +287,15 @@ export default function ScanPage() {
     setStatus("Scanner stopped");
   }
 
+  // Debounced handler
   function handleDetected(raw) {
     const digits = (raw || "").replace(/\D/g, "");
     if (!digits) return;
 
-    // Debounce duplicates
     const now = Date.now();
-    if (lastScanRef.current.code === digits && now - lastScanRef.current.t < 1200) return;
+    if (lastScanRef.current.code === digits && now - lastScanRef.current.t < 900) return;
     lastScanRef.current = { code: digits, t: now };
 
-    // Likely EAN/UPC lengths
     if (![8, 12, 13].includes(digits.length)) return;
 
     setLastCode(digits);
@@ -242,11 +304,9 @@ export default function ScanPage() {
 
   async function ensureActiveList() {
     if (!uid) return null;
-
-    // If selected present, good
     if (selectedListId) return selectedListId;
 
-    // Else try to find most recent list
+    // Try most recent
     const qRef = query(collection(db, "users", uid, "wishlists"), orderBy("updatedAt", "desc"), limit(1));
     const snap = await getDocs(qRef);
     if (!snap.empty) {
@@ -255,7 +315,7 @@ export default function ScanPage() {
       return id;
     }
 
-    // Else create one
+    // Create if none
     const name = `Visit — ${new Date().toLocaleDateString()}`;
     const ref = await addDoc(collection(db, "users", uid, "wishlists"), {
       name,
@@ -273,31 +333,21 @@ export default function ScanPage() {
 
     const book = await lookupBook(isbnDigits);
     if (!book) { setStatus("Not found"); return; }
-
-    if (!uid) {
-      setStatus("Not signed in.");
-      setFirestoreError("auth/no-user");
-      return;
-    }
+    if (!uid) { setStatus("Not signed in."); setFirestoreError("auth/no-user"); return; }
 
     try {
-      // Ensure we have a list to save into
       const listId = await ensureActiveList();
 
-      // Save into per-list structure (for lists screens)
       if (listId) {
         await setDoc(
           doc(db, "users", uid, "wishlists", listId, "items", book.isbn),
           { ...book, addedAt: serverTimestamp() },
           { merge: true }
         );
-        // Touch list updatedAt
-        await updateDoc(doc(db, "users", uid, "wishlists", listId), {
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, "users", uid, "wishlists", listId), { updatedAt: serverTimestamp() });
       }
 
-      // Also save to legacy single-list path so Home continues to see items
+      // Legacy path so Home still shows items if needed
       await setDoc(
         doc(db, "wishlists", uid, "items", book.isbn),
         { ...book, addedAt: serverTimestamp() },
@@ -312,7 +362,7 @@ export default function ScanPage() {
     }
   }
 
-  // Manual entry (real add, not debug)
+  // Manual ISBN entry (real add)
   const [manualIsbn, setManualIsbn] = useState("");
   function onManualSubmit(e) {
     e.preventDefault();
@@ -336,7 +386,7 @@ export default function ScanPage() {
         <a className="cc-btn-outline" href="/">Home</a>
       </div>
 
-      {/* Active list chooser */}
+      {/* Active list */}
       <div className="cc-card" style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 14, opacity: 0.8 }}>Active list:</span>
@@ -346,7 +396,9 @@ export default function ScanPage() {
             style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", minWidth: 160 }}
           >
             {!lists.length && <option value="">(creating…)</option>}
-            {lists.map(l => <option key={l.id} value={l.id}>{l.name || "Wishlist"}</option>)}
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>{l.name || "Wishlist"}</option>
+            ))}
           </select>
         </div>
         <div style={{ color: "#666", fontSize: 12 }}>Scans will be added here.</div>
@@ -372,7 +424,7 @@ export default function ScanPage() {
           </div>
         )}
 
-        {/* Video with smaller size + finder frame */}
+        {/* Video with smaller size */}
         <div style={{ position: "relative", width: "100%", display: "grid", placeItems: "center" }}>
           <video
             ref={videoRef}
@@ -381,14 +433,15 @@ export default function ScanPage() {
             playsInline
             style={{
               width: "100%",
-              maxWidth: 360,        // 👈 smaller camera window
+              maxWidth: 360,        // compact window
               aspectRatio: "3 / 4",
               borderRadius: 12,
               background: "#000",
               display: "block",
             }}
           />
-          {/* Finder frame overlay */}
+
+          {/* --- Inverted overlay: center bright, outside dim --- */}
           <div
             aria-hidden
             style={{
@@ -399,25 +452,49 @@ export default function ScanPage() {
               pointerEvents: "none",
             }}
           >
-            <div style={{ position: "relative", width: "90%", maxWidth: 340 }}>
+            <div
+              style={{
+                position: "relative",
+                width: FINDER_WIDTH,
+                maxWidth: "90%",
+                height: FINDER_HEIGHT,
+              }}
+            >
+              {/* Outside dim using CSS mask (transparent window over dim layer) */}
               <div
                 style={{
-                  width: "100%",
-                  height: 160,      // 👈 shorter guide box
-                  margin: "0 auto",
-                  borderRadius: 12,
-                  boxShadow: "0 0 0 20000px rgba(0,0,0,0.42) inset",
-                  border: "2px solid rgba(255,255,255,0.9)",
+                  position: "absolute",
+                  inset: 0,
+                  // Dim the entire area
+                  background: "rgba(0,0,0,0.45)",
+                  // Cut out the center rectangle (finder) to keep it BRIGHT
+                  WebkitMask: "linear-gradient(#000, #000)",
+                  maskComposite: "exclude",
+                  WebkitMaskComposite: "destination-out",
                 }}
               />
-              {/* Corner accents */}
+              {/* Clear center "finder" (just a placeholder to define the mask box) */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  width: FINDER_WIDTH,
+                  height: FINDER_HEIGHT,
+                  transform: "translate(-50%, -50%)",
+                  background: "transparent",
+                  borderRadius: 12,
+                  boxShadow: "0 0 0 2px rgba(255,255,255,0.95) inset",
+                }}
+              />
+              {/* Corners */}
               {["tl","tr","bl","br"].map((pos) => (
                 <span
                   key={pos}
                   style={{
                     position: "absolute",
-                    width: 24,
-                    height: 24,
+                    width: 22,
+                    height: 22,
                     borderColor: "rgba(255,255,255,0.95)",
                     ...(pos === "tl" && { top: -2, left: -2, borderTopWidth: 4, borderLeftWidth: 4, borderStyle: "solid" }),
                     ...(pos === "tr" && { top: -2, right: -2, borderTopWidth: 4, borderRightWidth: 4, borderStyle: "solid" }),
@@ -430,12 +507,15 @@ export default function ScanPage() {
               <span
                 style={{
                   position: "absolute",
-                  left: 0, right: 0,
-                  top: 0,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  top: 4,
+                  width: Math.min(FINDER_WIDTH - 12, 300),
                   height: 2,
                   background: "rgba(207,172,120,0.95)",
                   boxShadow: "0 0 12px rgba(207,172,120,0.9)",
-                  animation: "ccScanLine 1200ms linear infinite",
+                  borderRadius: 2,
+                  animation: "ccScanLine 1100ms linear infinite",
                 }}
               />
             </div>
@@ -461,13 +541,23 @@ export default function ScanPage() {
           </div>
         )}
         <div style={{ color: "#666", fontSize: 12 }}>
-          Tip: Hold ~5–8 inches away, center the barcode in the box, and use good lighting.
+          Tips: moderate distance (5–8"), avoid glare, align the barcode in the bright box.
         </div>
       </div>
 
-      {/* Manual ISBN entry (real add) */}
+      {/* Manual ISBN entry (adds to the same active list) */}
       <div className="cc-card" style={{ marginTop: 12 }}>
-        <form onSubmit={onManualSubmit} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, maxWidth: 420, margin: "0 auto" }}>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const digits = manualIsbn.replace(/\D/g, "");
+            if (digits) {
+              handleDetected(digits);
+              setManualIsbn("");
+            }
+          }}
+          style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, maxWidth: 420, margin: "0 auto" }}
+        >
           <input
             value={manualIsbn}
             onChange={(e) => setManualIsbn(e.target.value)}
@@ -481,12 +571,13 @@ export default function ScanPage() {
         </form>
       </div>
 
+      {/* Animations */}
       <style jsx>{`
         @keyframes ccScanLine {
-          0%   { transform: translateY(0); opacity: 0.35; }
+          0%   { transform: translate(-50%, 0); opacity: 0.35; }
           10%  { opacity: 1; }
           90%  { opacity: 1; }
-          100% { transform: translateY(158px); opacity: 0.35; }
+          100% { transform: translate(-50%, ${FINDER_HEIGHT - 8}px); opacity: 0.35; }
         }
       `}</style>
     </main>
