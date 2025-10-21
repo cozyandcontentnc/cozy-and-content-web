@@ -34,9 +34,23 @@ export default function ScanPage() {
   const [status, setStatus] = useState("Tap Start to enable the camera");
   const [lastCode, setLastCode] = useState("");
   const [firestoreError, setFirestoreError] = useState("");
-
-  // secure-context tip
   const [isSecureContext, setIsSecureContext] = useState(true);
+
+  // Flash overlay state (fallback / also nice UI affordance)
+  const [flash, setFlash] = useState(null); // null | "detect" | "save"
+  const flashTimerRef = useRef(null);
+
+  function triggerFlash(kind = "detect") {
+    // kind: "detect" (white) or "save" (green)
+    setFlash(kind);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setFlash(null), 120); // quick flash
+  }
+
+  function cleanupFlash() {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlash(null);
+  }
 
   // ZXing with hints (EAN/UPC only → better accuracy for books)
   const zxingRef = useRef(null);
@@ -48,7 +62,6 @@ export default function ScanPage() {
       BarcodeFormat.UPC_A,
       BarcodeFormat.UPC_E,
     ]);
-    // A small throttle between callbacks
     zxingRef.current = new BrowserMultiFormatReader(hints, 300);
   }
 
@@ -64,18 +77,34 @@ export default function ScanPage() {
     }
   }, []);
 
-  // Ensure we’re signed in (if not, saving will fail)
+  // Ensure we’re signed in
   useEffect(() => {
     let active = true;
     (async () => {
-      const user = await ensureAuth(); // If not logged in, this may return null
+      const user = await ensureAuth({ allowAnonymous: true }); // allow anon for scan-and-go
       if (active) setUid(user?.uid || null);
     })();
     return () => { active = false; };
   }, []);
 
-  function vibrate(ms = 40) {
-    try { navigator.vibrate && navigator.vibrate(ms); } catch {}
+  function vibrate(ms = 50) {
+    try {
+      if (typeof window !== "undefined" && "vibrate" in navigator) {
+        navigator.vibrate(ms);
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  function onFeedbackDetect() {
+    // Vibrate briefly OR flash if not available
+    if (!vibrate(35)) triggerFlash("detect");
+  }
+
+  function onFeedbackSaved() {
+    // Stronger haptic OR green flash if not available
+    if (!vibrate(90)) triggerFlash("save");
   }
 
   function handleDetected(raw) {
@@ -88,11 +117,10 @@ export default function ScanPage() {
     if (lastScanRef.current.code === digits && now - lastScanRef.current.t < 1200) return;
     lastScanRef.current = { code: digits, t: now };
 
-    // Likely lengths
+    // Likely barcode lengths for books/retail
     if (![8, 12, 13].includes(digits.length)) return;
 
-    // quick haptic on detection
-    vibrate(25);
+    onFeedbackDetect(); // 🔔 feedback on detection
     saveBook(digits);
   }
 
@@ -101,10 +129,7 @@ export default function ScanPage() {
     setStatus("Looking up…");
 
     const book = await lookupBook(isbnDigits);
-    if (!book) {
-      setStatus("Not found");
-      return;
-    }
+    if (!book) { setStatus("Not found"); return; }
 
     if (!uid) {
       setStatus("Not signed in. Please log in.");
@@ -119,8 +144,7 @@ export default function ScanPage() {
         { merge: true }
       );
       setStatus(`Added: ${book.title}`);
-      // stronger haptic on save
-      vibrate(60);
+      onFeedbackSaved(); // ✅ stronger feedback on successful save
     } catch (e) {
       console.error("Firestore write failed:", e);
       setStatus("Failed to save to Firestore.");
@@ -144,7 +168,6 @@ export default function ScanPage() {
         try { await videoRef.current.play(); } catch {}
       }
 
-      // Start decoding with ZXing
       await zxingRef.current.decodeFromVideoDevice(
         undefined, // let zxing pick based on facingMode
         videoRef.current,
@@ -169,6 +192,7 @@ export default function ScanPage() {
     if (stream) stream.getTracks().forEach((t) => t.stop());
     setRunning(false);
     setStatus("Scanner stopped");
+    cleanupFlash();
   }
 
   useEffect(() => {
@@ -176,7 +200,7 @@ export default function ScanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Manual entry to debug Firestore path/rules quickly
+  // Manual entry for debugging
   const [manual, setManual] = useState("");
   async function testManualAdd(e) {
     e.preventDefault();
@@ -185,7 +209,6 @@ export default function ScanPage() {
     handleDetected(digits);
   }
 
-  // Minimal UI
   return (
     <main style={{ padding: 16, maxWidth: 760, margin: "0 auto", fontFamily: "system-ui" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -195,13 +218,44 @@ export default function ScanPage() {
       </div>
 
       <div className="cc-card" style={{ display: "grid", gap: 8 }}>
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          playsInline
-          style={{ width: "100%", aspectRatio: "3 / 4", maxWidth: 520, borderRadius: 12, background: "#000", margin: "0 auto" }}
-        />
+        {/* Video wrapper so we can position the flash overlay on top */}
+        <div style={{ position: "relative", width: "100%" }}>
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            style={{
+              width: "100%",
+              aspectRatio: "3 / 4",
+              maxWidth: 520,
+              borderRadius: 12,
+              background: "#000",
+              display: "block",
+              margin: "0 auto"
+            }}
+          />
+
+          {/* Flash overlay (fallback and visual feedback) */}
+          {flash && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                margin: "0 auto",
+                maxWidth: 520,
+                borderRadius: 12,
+                pointerEvents: "none",
+                // white for detect, green for save
+                background: flash === "save"
+                  ? "rgba(54, 92, 74, 0.35)"  // cozy green
+                  : "rgba(255, 255, 255, 0.6)",
+                animation: "ccFlash 140ms ease-out",
+              }}
+            />
+          )}
+        </div>
+
         <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
           {!running ? (
             <button className="cc-btn" onClick={startScanner}>▶️ Start</button>
@@ -240,6 +294,15 @@ export default function ScanPage() {
           <button className="cc-btn-outline" type="submit">Add Manually</button>
         </form>
       </div>
+
+      {/* Flash keyframes (scoped inline) */}
+      <style jsx>{`
+        @keyframes ccFlash {
+          0%   { opacity: 0; }
+          1%   { opacity: 1; }
+          100% { opacity: 0; }
+        }
+      `}</style>
     </main>
   );
 }
