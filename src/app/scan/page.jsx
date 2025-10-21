@@ -1,5 +1,6 @@
 ﻿// src/app/scan/page.jsx
 "use client";
+export const dynamic = "force-dynamic";
 
 import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
@@ -33,6 +34,20 @@ export default function ScanPage() {
   const [running, setRunning] = useState(false);
   const lastScanRef = useRef({ code: "", t: 0 });
 
+  // client-only env flags (avoid `location` on server)
+  const [isSecureContext, setIsSecureContext] = useState(true);
+
+  useEffect(() => {
+    // Determine HTTPS/localhost only on client
+    if (typeof window !== "undefined") {
+      const proto = window.location?.protocol || "";
+      const host = window.location?.hostname || "";
+      const https = proto === "https:";
+      const isLocal = host === "localhost" || host === "127.0.0.1";
+      setIsSecureContext(https || isLocal);
+    }
+  }, []);
+
   // Make sure we’re signed in before saving
   useEffect(() => {
     let active = true;
@@ -48,24 +63,18 @@ export default function ScanPage() {
     setStatus("Starting camera…");
 
     try {
-      // Request the environment/back camera when possible
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          // Some browsers (Chrome Android) honor zoom/focus hints:
-          // advanced: [{ focusMode: "continuous" }] // not widely supported, safe to omit
         },
         audio: false,
       });
 
-      // attach stream to <video>
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        // user-gesture policies—explicitly play
         try { await videoRef.current.play(); } catch {}
       }
 
-      // Pick a back camera if we can find one
       const devices = await BrowserMultiFormatReader.listVideoInputDevices();
       const backCam =
         devices.find(d =>
@@ -74,7 +83,6 @@ export default function ScanPage() {
           (d.label || "").toLowerCase().includes("environment")
         ) || devices[0];
 
-      // Start decoding
       await reader.decodeFromVideoDevice(
         backCam?.deviceId ?? undefined,
         videoRef.current,
@@ -84,10 +92,8 @@ export default function ScanPage() {
           const digits = (raw || "").replace(/\D/g, "");
           if (!digits) return;
 
-          // show last
           setLastCode(digits);
 
-          // debounce same code for 1.5s
           const now = Date.now();
           if (lastScanRef.current.code === digits && now - lastScanRef.current.t < 1500) return;
           lastScanRef.current = { code: digits, t: now };
@@ -104,8 +110,6 @@ export default function ScanPage() {
             return;
           }
 
-          // IMPORTANT: save where your Home screen reads:
-          // wishlists/{uid}/items/{isbn}
           try {
             await setDoc(
               doc(db, "wishlists", uid, "items", book.isbn),
@@ -124,7 +128,6 @@ export default function ScanPage() {
       setStatus("Point camera at a barcode");
     } catch (err) {
       console.error(err);
-      // Common reasons: blocked permission, not https on mobile, no camera
       setStatus("Camera access denied or unavailable.");
       setRunning(false);
     }
@@ -140,7 +143,6 @@ export default function ScanPage() {
 
   useEffect(() => {
     return () => {
-      // Cleanup on unmount
       stopScanner();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -175,9 +177,9 @@ export default function ScanPage() {
       <div className="cc-card" style={{ marginTop: 12, display: "grid", gap: 4 }}>
         <div>Last code: <strong>{lastCode || "—"}</strong></div>
         <div style={{ color: "#555" }}>{status}</div>
-        {!location.protocol.startsWith("https") && (
+        {!isSecureContext && (
           <div style={{ color: "#a33", fontSize: 12 }}>
-            Tip: On iOS/Android, camera requires HTTPS (Vercel is fine).
+            Tip: On phones, the camera needs HTTPS (Vercel is fine). Plain LAN IPs won’t work.
           </div>
         )}
       </div>
