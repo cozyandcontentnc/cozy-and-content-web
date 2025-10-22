@@ -103,9 +103,8 @@ export async function togglePublic(uid, listId, next) {
         ownerUid: uid,
         listId,
         listName: list.name || "Wishlist",
-        createdAt: currentShareId ? list.createdAt || serverTimestamp() : serverTimestamp(),
+        createdAt: currentShareId ? (list.createdAt || serverTimestamp()) : serverTimestamp(),
         updatedAt: serverTimestamp(),
-        // Optionally a simple version flag for future migrations
         v: 1,
       },
       { merge: true }
@@ -145,16 +144,17 @@ export async function togglePublic(uid, listId, next) {
    =================================================================== */
 async function mirrorListItemsToShare(uid, listId, shareId) {
   const srcCol = collection(db, "users", uid, "wishlists", listId, "items");
-  let qCur = query(srcCol, orderBy("addedAt", "desc"), limit(400));
   let last = null;
 
   while (true) {
-    const snap = await getDocs(last ? query(srcCol, orderBy("addedAt", "desc"), startAfter(last), limit(400)) : qCur);
+    const pageQ = last
+      ? query(srcCol, orderBy("addedAt", "desc"), startAfter(last), limit(400))
+      : query(srcCol, orderBy("addedAt", "desc"), limit(400));
+
+    const snap = await getDocs(pageQ);
     if (snap.empty) break;
 
-    let batch = writeBatch(db);
-    let ops = 0;
-
+    const batch = writeBatch(db);
     snap.forEach((d) => {
       const it = d.data() || {};
       const pubDoc = doc(db, "shares", shareId, "items", d.id);
@@ -163,21 +163,16 @@ async function mirrorListItemsToShare(uid, listId, shareId) {
         {
           title: it.title || "",
           author: it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : ""),
-          authors: it.authors || null, // keep array too if you have it
+          authors: it.authors || null,
           isbn: it.isbn || "",
           image: it.image || it.coverUrl || "",
           addedAt: it.addedAt || serverTimestamp(),
         },
         { merge: true }
       );
-      ops++;
-      // Safety: commit mid-page if we ever exceed ~450 writes (very unlikely here)
-      if (ops >= 450) {
-        // no-op; we’re under 400 per page, but kept for future-proofing
-      }
     });
 
-    // also bump parent share updatedAt
+    // bump parent share updatedAt
     batch.set(
       doc(db, "shares", shareId),
       { updatedAt: serverTimestamp() },
@@ -194,7 +189,6 @@ async function mirrorListItemsToShare(uid, listId, shareId) {
    INTERNAL: delete shares/{shareId}/items/* then the share doc
    =================================================================== */
 async function deleteShareTree(shareId) {
-  // delete items in pages
   const itemsCol = collection(db, "shares", shareId, "items");
   while (true) {
     const page = await getDocs(query(itemsCol, limit(400)));
@@ -204,7 +198,6 @@ async function deleteShareTree(shareId) {
     await batch.commit();
     if (page.size < 400) break;
   }
-  // delete parent share doc
   await deleteDoc(doc(db, "shares", shareId));
 }
 
@@ -221,4 +214,57 @@ export async function createList(uid, name) {
     updatedAt: serverTimestamp(),
   });
   return ref.id;
+}
+
+/* ===================================================================
+   REPAIR: ensure shares/{shareId} + shares/{shareId}/items for a single list
+   - Reuses existing shareId if present; otherwise generates one.
+   =================================================================== */
+export async function ensureShareForList(uid, listId) {
+  const listRef = doc(db, "users", uid, "wishlists", listId);
+  const listSnap = await getDoc(listRef);
+  if (!listSnap.exists()) throw new Error("List not found");
+  const list = listSnap.data() || {};
+  if (!list.isPublic && !list.shareId) throw new Error("List is not public");
+
+  const shareId = list.shareId || doc(collection(db, "shares")).id;
+
+  // Upsert parent share doc
+  await setDoc(
+    doc(db, "shares", shareId),
+    {
+      ownerUid: uid,
+      listId,
+      listName: list.name || "Wishlist",
+      createdAt: list.createdAt || serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      v: 1,
+    },
+    { merge: true }
+  );
+
+  // Mirror items
+  await mirrorListItemsToShare(uid, listId, shareId);
+
+  // Ensure list flags
+  await updateDoc(listRef, { isPublic: true, shareId, updatedAt: serverTimestamp() });
+
+  return shareId;
+}
+
+/* ===================================================================
+   BACKFILL: ensure shares for all currently public lists (run once)
+   =================================================================== */
+export async function backfillAllPublicShares(uid) {
+  const listsCol = collection(db, "users", uid, "wishlists");
+  const snap = await getDocs(listsCol);
+  const results = [];
+  for (const d of snap.docs) {
+    const data = d.data() || {};
+    if (data.isPublic) {
+      const shareId = await ensureShareForList(uid, d.id);
+      results.push({ listId: d.id, shareId });
+    }
+  }
+  return results;
 }
