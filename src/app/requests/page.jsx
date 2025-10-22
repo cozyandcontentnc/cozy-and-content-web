@@ -1,87 +1,108 @@
+// app/requests/page.jsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { auth, db } from "@/lib/firebase"; // Firebase auth import
-import { onAuthStateChanged } from "firebase/auth";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { ensureAuth, db } from "@/lib/firebase";
+import {
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+} from "firebase/firestore";
+
+const SHOP_EMAIL = "cozyandcontentbooks@gmail.com";
 
 export default function RequestsPage() {
-  const [user, setUser] = useState(null);
-  const [name, setName] = useState("");
+  const [uid, setUid] = useState(null);
+  const [name, setName] = useState("A Cozy Shopper");
   const [email, setEmail] = useState("");
-  const [requestedBooks, setRequestedBooks] = useState([]);
+  const [requestedBooks, setRequestedBooks] = useState(null); // null = loading
   const [selectedBooks, setSelectedBooks] = useState([]);
 
+  // Auth + live subscription
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUser(user);
-        setName(user.displayName || "A Cozy Shopper"); // Set displayName or default to a fallback name
-        setEmail(user.email || "");
-      } else {
-        setUser(null);
-      }
-    });
-    return () => unsubscribe();
+    let unsub = null;
+
+    (async () => {
+      const user = await ensureAuth({ allowAnonymous: true });
+      if (!user?.uid) return;
+      setUid(user.uid);
+      if (user.displayName) setName(user.displayName);
+      if (user.email) setEmail(user.email);
+
+      // Live updates; newest first. We'll filter status client-side to avoid index requirements.
+      const qRef = query(
+        collection(db, "users", user.uid, "bookRequests"),
+        orderBy("createdAt", "desc")
+      );
+
+      unsub = onSnapshot(qRef, (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+        const onlyRequested = rows.filter((r) => (r.status || "requested") === "requested");
+        setRequestedBooks(onlyRequested);
+        // Keep selection if items still present
+        setSelectedBooks((prev) => prev.filter((id) => onlyRequested.some((r) => r.id === id)));
+      });
+    })();
+
+    return () => { if (unsub) unsub(); };
   }, []);
 
-  useEffect(() => {
-    if (!user?.uid) return;
+  const selectedRows = useMemo(
+    () => (requestedBooks || []).filter((b) => selectedBooks.includes(b.id)),
+    [requestedBooks, selectedBooks]
+  );
 
-    // Fetch requested books from Firestore
-    const fetchRequestedBooks = async () => {
-      const booksRef = collection(db, "users", user.uid, "bookRequests");
-      const q = query(booksRef, where("status", "==", "requested"));
-      const querySnapshot = await getDocs(q);
-      
-      const books = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      
-      setRequestedBooks(books);
-    };
-
-    fetchRequestedBooks();
-  }, [user]);
-
-  const handleCheckboxChange = (event, bookId) => {
-    setSelectedBooks((prevSelectedBooks) =>
-      event.target.checked
-        ? [...prevSelectedBooks, bookId]
-        : prevSelectedBooks.filter((id) => id !== bookId)
+  function handleCheckboxChange(e, bookId) {
+    setSelectedBooks((prev) =>
+      e.target.checked ? [...prev, bookId] : prev.filter((id) => id !== bookId)
     );
-  };
+  }
 
-  const handleSubmit = (e) => {
+  function buildMailto({ name, email, items }) {
+    const subject = encodeURIComponent("Wishlist Order Request");
+    const lines = [];
+    lines.push(`Name: ${name || ""}`);
+    lines.push(`Email: ${email || ""}`);
+    lines.push("");
+    lines.push("I'd like to order the following titles:");
+    lines.push("");
+    items.forEach((b, idx) => {
+      const author =
+        b.author || (Array.isArray(b.authors) ? b.authors.join(", ") : "");
+      lines.push(
+        `${idx + 1}. ${b.title || "Untitled"}${author ? " — " + author : ""}${
+          b.isbn ? " (ISBN: " + b.isbn + ")" : ""
+        }`
+      );
+    });
+    lines.push("");
+    lines.push("Notes:");
+    const body = encodeURIComponent(lines.join("\n"));
+    return `mailto:${SHOP_EMAIL}?subject=${subject}&body=${body}`;
+  }
+
+  function handleSubmit(e) {
     e.preventDefault();
-
-    // Create the email content (in a real app, you would send this via email)
-    const orderDetails = requestedBooks
-      .filter((book) => selectedBooks.includes(book.id))
-      .map((book) => `${book.title} by ${book.author}`)
-      .join("\n");
-
-    const emailContent = `
-      Name: ${name}
-      Email: ${email}
-      Order Details:
-      ${orderDetails}
-    `;
-
-    console.log("Order submitted:", emailContent);
-
-    // Your logic for submitting the request, e.g., sending email to cozyandcontentbooks@gmail.com
-    // You can use a cloud function or any API for sending emails.
-
-    // For now, just show a message
-    alert("Order submitted! We will confirm if it's in stock.");
-  };
+    if (!selectedRows.length) {
+      alert("Select at least one book to order.");
+      return;
+    }
+    const href = buildMailto({ name, email, items: selectedRows });
+    window.location.href = href; // open the email draft
+  }
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
-      <h1>Request a Book</h1>
-      {user ? (
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
+        <Link href="/" className="cc-btn-outline">← Home</Link>
+        <h1 style={{ margin: 0 }}>Request a Book</h1>
+      </div>
+
+      {!uid ? (
+        <div className="cc-card">Loading…</div>
+      ) : (
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: 12 }}>
             <label htmlFor="name" style={{ display: "block", marginBottom: 6 }}>
@@ -115,7 +136,10 @@ export default function RequestsPage() {
 
           <div style={{ marginBottom: 12 }}>
             <label style={{ display: "block", marginBottom: 6 }}>Select Books to Order</label>
-            {requestedBooks.length === 0 ? (
+
+            {requestedBooks === null ? (
+              <p>Loading…</p>
+            ) : requestedBooks.length === 0 ? (
               <p>No books requested yet.</p>
             ) : (
               requestedBooks.map((book) => (
@@ -128,19 +152,28 @@ export default function RequestsPage() {
                     style={{ marginRight: 8 }}
                   />
                   <label htmlFor={`book-${book.id}`} style={{ fontSize: 14 }}>
-                    {book.title} by {book.author}
+                    {book.title} {book.author ? `by ${book.author}` : ""}
+                    {book.isbn ? ` — ISBN: ${book.isbn}` : ""}
                   </label>
                 </div>
               ))
             )}
           </div>
 
-          <button type="submit" style={{ padding: "10px 20px", backgroundColor: "#0070f3", color: "white", border: "none", cursor: "pointer" }}>
+          <button
+            type="submit"
+            style={{
+              padding: "10px 20px",
+              backgroundColor: "#0070f3",
+              color: "white",
+              border: "none",
+              cursor: "pointer",
+            }}
+            disabled={!requestedBooks || requestedBooks.length === 0}
+          >
             Submit Order
           </button>
         </form>
-      ) : (
-        <p>Please log in to submit a book request.</p>
       )}
     </main>
   );
