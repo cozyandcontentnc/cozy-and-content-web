@@ -19,7 +19,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 
-// --- Google Books lookup ---
+// ---- Google Books lookup ----
 async function lookupBook(isbn) {
   try {
     const r = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`);
@@ -40,9 +40,9 @@ async function lookupBook(isbn) {
 export default function ScanPage() {
   const videoRef = useRef(null);
   const rafRef = useRef(null);
-  const detectorRef = useRef(null);      // native BarcodeDetector
-  const zxingRef = useRef(null);         // ZXing fallback
-  const canvasRef = useRef(null);        // offscreen ROI canvas for native detector
+  const detectorRef = useRef(null);
+  const zxingRef = useRef(null);
+  const canvasRef = useRef(null);
 
   const [uid, setUid] = useState(null);
 
@@ -58,11 +58,10 @@ export default function ScanPage() {
   const [devices, setDevices] = useState([]);
   const [deviceId, setDeviceId] = useState("");
 
-  // Finder box size (in CSS px, matches overlay)
+  // Finder box (you can tweak these)
   const FINDER_WIDTH = 320;
-  const FINDER_HEIGHT = 140;
+  const FINDER_HEIGHT = 140; // you said this is “almost a little too short”; bump to 150 if you want
 
-  // Debounce
   const lastScanRef = useRef({ code: "", t: 0 });
 
   // ZXing with EAN/UPC hints
@@ -88,10 +87,9 @@ export default function ScanPage() {
     return () => { active = false; };
   }, []);
 
-  // Load lists & auto-create if needed
+  // Load lists & auto-create if none
   useEffect(() => {
     if (!uid) return;
-
     const listsCol = collection(db, "users", uid, "wishlists");
     const qRef = query(listsCol, orderBy("updatedAt", "desc"));
     const unsub = onSnapshot(qRef, async (snap) => {
@@ -116,13 +114,9 @@ export default function ScanPage() {
         return;
       }
 
-      if (!selectedListId) {
-        setSelectedListId(arr[0].id);
-      } else if (!arr.find((l) => l.id === selectedListId)) {
-        setSelectedListId(arr[0].id);
-      }
+      if (!selectedListId) setSelectedListId(arr[0].id);
+      else if (!arr.find((l) => l.id === selectedListId)) setSelectedListId(arr[0].id);
     });
-
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
@@ -149,35 +143,18 @@ export default function ScanPage() {
     if (stream) stream.getTracks().forEach((t) => t.stop());
   }
 
-  // Try to enable continuous autofocus + mild zoom (if supported)
+  // Try continuous autofocus + mild zoom (if supported)
   async function tuneTrack(video) {
     try {
       const stream = video.srcObject;
       const track = stream?.getVideoTracks?.()[0];
       if (!track) return;
       const caps = track.getCapabilities?.() || {};
-      const cons = track.getConstraints?.() || {};
-
       const newConstraints = {};
-
-      // Ask for continuous focus if available
-      if (caps.focusMode && caps.focusMode.includes("continuous")) {
-        newConstraints.focusMode = "continuous";
-      }
-      // Mild zoom helps barcode clarity
-      if (typeof caps.zoom === "number") {
-        const target = Math.min(caps.zoom, 2.0); // up to 2x if available
-        newConstraints.zoom = target;
-      } else if (caps.zoom && caps.zoom.max) {
-        newConstraints.zoom = Math.min(caps.zoom.max, 2.0);
-      }
-
-      if (Object.keys(newConstraints).length) {
-        await track.applyConstraints({ advanced: [newConstraints] });
-      }
-    } catch {
-      // ignore if not supported
-    }
+      if (caps.focusMode && caps.focusMode.includes("continuous")) newConstraints.focusMode = "continuous";
+      if (caps.zoom && typeof caps.zoom.max === "number") newConstraints.zoom = Math.min(caps.zoom.max, 2.0);
+      if (Object.keys(newConstraints).length) await track.applyConstraints({ advanced: [newConstraints] });
+    } catch {}
   }
 
   async function startScanner() {
@@ -186,7 +163,7 @@ export default function ScanPage() {
     setFirestoreError("");
 
     try {
-      // Request higher resolution to improve recognition speed/accuracy
+      // Request higher resolution; aspect handled by CSS
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: deviceId ? { exact: deviceId } : undefined,
@@ -200,19 +177,16 @@ export default function ScanPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         try { await videoRef.current.play(); } catch {}
-        // Tune autofocus/zoom if possible
         tuneTrack(videoRef.current);
       }
 
       await refreshDevices();
 
-      // Native detector (faster) on cropped ROI
+      // Native detector on ROI (fast)
       const NativeDetector = globalThis.BarcodeDetector;
       if (NativeDetector) {
         try {
-          detectorRef.current = new NativeDetector({
-            formats: ["ean_13", "ean_8", "upc_a", "upc_e"],
-          });
+          detectorRef.current = new NativeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
         } catch {
           detectorRef.current = null;
         }
@@ -222,22 +196,23 @@ export default function ScanPage() {
         setRunning(true);
         setStatus("Center the barcode in the box");
 
-        // Prepare ROI canvas
-        if (!canvasRef.current) {
-          canvasRef.current = document.createElement("canvas");
-        }
+        if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
 
         const loop = async () => {
           if (!detectorRef.current || !videoRef.current) return;
-
           const video = videoRef.current;
           const vw = video.videoWidth || 1280;
           const vh = video.videoHeight || 720;
 
-          // Compute ROI rect centered in the video, with same aspect as finder box
-          const scale = Math.min(vw / 360, vh / 480); // rough scaling reference
-          const roiW = Math.min(FINDER_WIDTH * (vw / video.clientWidth), vw * 0.9);
-          const roiH = Math.min(FINDER_HEIGHT * (vh / video.clientHeight), vh * 0.5);
+          // ROI: center, scaled based on finder size relative to CSS box vs video pixels
+          const cssW = video.clientWidth || 360;
+          const cssH = video.clientHeight || 240; // shorter now due to new aspect ratio
+
+          const scaleX = vw / cssW;
+          const scaleY = vh / cssH;
+
+          const roiW = Math.min(FINDER_WIDTH * scaleX, vw);
+          const roiH = Math.min(FINDER_HEIGHT * scaleY, vh);
           const rx = Math.round((vw - roiW) / 2);
           const ry = Math.round((vh - roiH) / 2);
 
@@ -253,16 +228,13 @@ export default function ScanPage() {
               const raw = results[0]?.rawValue || "";
               if (raw) handleDetected(raw);
             }
-          } catch {
-            // ignore frame errors
-          }
+          } catch {}
 
-          // Run at ~30fps but detection each ~2 frames (smoother UI, less CPU)
           rafRef.current = requestAnimationFrame(loop);
         };
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        // ZXing fallback: whole frame scanning (slower than ROI but reliable)
+        // ZXing fallback
         await zxingRef.current.decodeFromVideoDevice(
           deviceId || undefined,
           videoRef.current,
@@ -287,7 +259,6 @@ export default function ScanPage() {
     setStatus("Scanner stopped");
   }
 
-  // Debounced handler
   function handleDetected(raw) {
     const digits = (raw || "").replace(/\D/g, "");
     if (!digits) return;
@@ -306,7 +277,6 @@ export default function ScanPage() {
     if (!uid) return null;
     if (selectedListId) return selectedListId;
 
-    // Try most recent
     const qRef = query(collection(db, "users", uid, "wishlists"), orderBy("updatedAt", "desc"), limit(1));
     const snap = await getDocs(qRef);
     if (!snap.empty) {
@@ -315,7 +285,6 @@ export default function ScanPage() {
       return id;
     }
 
-    // Create if none
     const name = `Visit — ${new Date().toLocaleDateString()}`;
     const ref = await addDoc(collection(db, "users", uid, "wishlists"), {
       name,
@@ -347,7 +316,7 @@ export default function ScanPage() {
         await updateDoc(doc(db, "users", uid, "wishlists", listId), { updatedAt: serverTimestamp() });
       }
 
-      // Legacy path so Home still shows items if needed
+      // Legacy path for Home screen
       await setDoc(
         doc(db, "wishlists", uid, "items", book.isbn),
         { ...book, addedAt: serverTimestamp() },
@@ -372,7 +341,27 @@ export default function ScanPage() {
     setManualIsbn("");
   }
 
-  // Cleanup on unmount
+  // Create a new list from Scan page
+  async function onCreateList() {
+    if (!uid) return;
+    const name = prompt("Name your new wishlist:", `Visit — ${new Date().toLocaleDateString()}`);
+    if (!name || !name.trim()) return;
+    try {
+      const ref = await addDoc(collection(db, "users", uid, "wishlists"), {
+        name: name.trim(),
+        isPublic: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setSelectedListId(ref.id);
+      setStatus(`Created list: ${name.trim()}`);
+    } catch (e) {
+      console.error(e);
+      setStatus("Couldn’t create the wishlist.");
+    }
+  }
+
+  // Cleanup
   useEffect(() => {
     return () => { stopScanner(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -386,14 +375,14 @@ export default function ScanPage() {
         <a className="cc-btn-outline" href="/">Home</a>
       </div>
 
-      {/* Active list */}
+      {/* Active list + New List button */}
       <div className="cc-card" style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 14, opacity: 0.8 }}>Active list:</span>
           <select
             value={selectedListId}
             onChange={(e) => setSelectedListId(e.target.value)}
-            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", minWidth: 160 }}
+            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", minWidth: 170 }}
           >
             {!lists.length && <option value="">(creating…)</option>}
             {lists.map((l) => (
@@ -401,7 +390,7 @@ export default function ScanPage() {
             ))}
           </select>
         </div>
-        <div style={{ color: "#666", fontSize: 12 }}>Scans will be added here.</div>
+        <button className="cc-btn-outline" onClick={onCreateList}>➕ New List</button>
       </div>
 
       <div className="cc-card" style={{ display: "grid", gap: 10 }}>
@@ -424,7 +413,7 @@ export default function ScanPage() {
           </div>
         )}
 
-        {/* Video with smaller size */}
+        {/* Video (camera window is now ~half as tall via aspectRatio) */}
         <div style={{ position: "relative", width: "100%", display: "grid", placeItems: "center" }}>
           <video
             ref={videoRef}
@@ -433,15 +422,15 @@ export default function ScanPage() {
             playsInline
             style={{
               width: "100%",
-              maxWidth: 360,        // compact window
-              aspectRatio: "3 / 4",
+              maxWidth: 360,         // width unchanged
+              aspectRatio: "3 / 2",  // 👈 shorter: half the previous 3/4 height
               borderRadius: 12,
               background: "#000",
               display: "block",
             }}
           />
 
-          {/* --- Inverted overlay: center bright, outside dim --- */}
+          {/* Inverted overlay: center bright, outside dim */}
           <div
             aria-hidden
             style={{
@@ -460,20 +449,17 @@ export default function ScanPage() {
                 height: FINDER_HEIGHT,
               }}
             >
-              {/* Outside dim using CSS mask (transparent window over dim layer) */}
+              {/* Dim the outside; keep center bright */}
               <div
                 style={{
                   position: "absolute",
                   inset: 0,
-                  // Dim the entire area
                   background: "rgba(0,0,0,0.45)",
-                  // Cut out the center rectangle (finder) to keep it BRIGHT
                   WebkitMask: "linear-gradient(#000, #000)",
                   maskComposite: "exclude",
                   WebkitMaskComposite: "destination-out",
                 }}
               />
-              {/* Clear center "finder" (just a placeholder to define the mask box) */}
               <div
                 style={{
                   position: "absolute",
@@ -487,7 +473,7 @@ export default function ScanPage() {
                   boxShadow: "0 0 0 2px rgba(255,255,255,0.95) inset",
                 }}
               />
-              {/* Corners */}
+              {/* Corner accents */}
               {["tl","tr","bl","br"].map((pos) => (
                 <span
                   key={pos}
@@ -540,24 +526,11 @@ export default function ScanPage() {
             Firestore error: <code>{firestoreError}</code>
           </div>
         )}
-        <div style={{ color: "#666", fontSize: 12 }}>
-          Tips: moderate distance (5–8"), avoid glare, align the barcode in the bright box.
-        </div>
       </div>
 
-      {/* Manual ISBN entry (adds to the same active list) */}
+      {/* Manual ISBN entry (adds to active list) */}
       <div className="cc-card" style={{ marginTop: 12 }}>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const digits = manualIsbn.replace(/\D/g, "");
-            if (digits) {
-              handleDetected(digits);
-              setManualIsbn("");
-            }
-          }}
-          style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, maxWidth: 420, margin: "0 auto" }}
-        >
+        <form onSubmit={onManualSubmit} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, maxWidth: 420, margin: "0 auto" }}>
           <input
             value={manualIsbn}
             onChange={(e) => setManualIsbn(e.target.value)}
