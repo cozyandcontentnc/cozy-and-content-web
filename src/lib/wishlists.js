@@ -1,98 +1,224 @@
 // src/lib/wishlists.js
-import { db } from "./firebase";
+"use client";
+
+import { db } from "@/lib/firebase";
 import {
-  serverTimestamp,
+  addDoc,
+  collection,
+  deleteDoc,
   doc,
+  getDoc,
+  getDocs,
+  orderBy,
+  query,
+  serverTimestamp,
   setDoc,
   updateDoc,
-  deleteDoc,
-  getDoc,
+  writeBatch,
+  startAfter,
+  limit,
 } from "firebase/firestore";
 
-/** Create a short share id */
-function makeShareId(len = 10) {
-  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let out = "";
-  const arr = new Uint32Array(len);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(arr);
-    for (let i = 0; i < len; i++) out += chars[arr[i] % chars.length];
-  } else {
-    for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return out;
+/* ===================================================================
+   READ: public mapping for a shareId
+   shares/{shareId} => { ownerUid, listId, listName? }
+   =================================================================== */
+export async function getPublicMapping(shareId) {
+  const sref = doc(db, "shares", shareId);
+  const snap = await getDoc(sref);
+  if (!snap.exists()) return null;
+  const d = snap.data() || {};
+  return {
+    shareId: snap.id,
+    ownerUid: d.ownerUid,
+    listId: d.listId,
+    listName: d.listName || "Wishlist",
+  };
 }
 
-/** Create a list and return its id (idempotent-ish) */
-export async function createList(uid, name = "New List", idMaybe) {
-  const id = idMaybe || crypto.randomUUID?.() || Math.random().toString(36).slice(2);
-  const ref = doc(db, "users", uid, "wishlists", id);
-  await setDoc(ref, {
-    name,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+/* ===================================================================
+   UPDATE: rename a list
+   users/{uid}/wishlists/{listId}
+   =================================================================== */
+export async function renameList(uid, listId, newName) {
+  const ref = doc(db, "users", uid, "wishlists", listId);
+  await updateDoc(ref, { name: newName, updatedAt: serverTimestamp() });
+  // keep share doc in sync if it exists
+  const listSnap = await getDoc(ref);
+  const shareId = listSnap.data()?.shareId;
+  if (shareId) {
+    await setDoc(
+      doc(db, "shares", shareId),
+      { listName: newName, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+  }
+}
+
+/* ===================================================================
+   DELETE: remove one item from a list
+   users/{uid}/wishlists/{listId}/items/{itemId}
+   Also remove mirrored public item if list is public.
+   =================================================================== */
+export async function removeItemById(uid, listId, itemId) {
+  const listRef = doc(db, "users", uid, "wishlists", listId);
+  const listSnap = await getDoc(listRef);
+  const shareId = listSnap.data()?.shareId || null;
+
+  const batch = writeBatch(db);
+  batch.delete(doc(db, "users", uid, "wishlists", listId, "items", itemId));
+  if (shareId) {
+    batch.delete(doc(db, "shares", shareId, "items", itemId));
+    batch.set(
+      doc(db, "shares", shareId),
+      { updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+  }
+  await batch.commit();
+}
+
+/* ===================================================================
+   TOGGLE PUBLIC:
+   - next === true  -> make public: ensure share doc + mirror items to shares/{shareId}/items
+   - next === false -> make private: delete shares subtree and unset flags
+   Returns shareId (when enabling).
+   =================================================================== */
+export async function togglePublic(uid, listId, next) {
+  const listRef = doc(db, "users", uid, "wishlists", listId);
+  const listSnap = await getDoc(listRef);
+  if (!listSnap.exists()) throw new Error("List not found.");
+
+  const list = listSnap.data() || {};
+  const currentShareId = list.shareId || null;
+
+  if (next) {
+    // ---- ENABLE PUBLIC ----
+    const shareId = currentShareId || doc(collection(db, "shares")).id;
+
+    // 1) upsert share doc
+    await setDoc(
+      doc(db, "shares", shareId),
+      {
+        ownerUid: uid,
+        listId,
+        listName: list.name || "Wishlist",
+        createdAt: currentShareId ? list.createdAt || serverTimestamp() : serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        // Optionally a simple version flag for future migrations
+        v: 1,
+      },
+      { merge: true }
+    );
+
+    // 2) mirror items into shares/{shareId}/items in batches
+    await mirrorListItemsToShare(uid, listId, shareId);
+
+    // 3) update list flags
+    await updateDoc(listRef, {
+      isPublic: true,
+      shareId,
+      updatedAt: serverTimestamp(),
+    });
+
+    return shareId;
+  } else {
+    // ---- DISABLE PUBLIC ----
+    const shareId = currentShareId;
+    if (shareId) {
+      await deleteShareTree(shareId);
+    }
+    await updateDoc(listRef, {
+      isPublic: false,
+      shareId: null,
+      updatedAt: serverTimestamp(),
+    });
+    return null;
+  }
+}
+
+/* ===================================================================
+   INTERNAL: mirror all items to shares/{shareId}/items
+   - paginated to avoid huge writes
+   - batches of up to ~400 ops per commit (under 500 limit)
+   Fields mirrored: id, title, author/authors, isbn, image/coverUrl, addedAt
+   =================================================================== */
+async function mirrorListItemsToShare(uid, listId, shareId) {
+  const srcCol = collection(db, "users", uid, "wishlists", listId, "items");
+  let qCur = query(srcCol, orderBy("addedAt", "desc"), limit(400));
+  let last = null;
+
+  while (true) {
+    const snap = await getDocs(last ? query(srcCol, orderBy("addedAt", "desc"), startAfter(last), limit(400)) : qCur);
+    if (snap.empty) break;
+
+    let batch = writeBatch(db);
+    let ops = 0;
+
+    snap.forEach((d) => {
+      const it = d.data() || {};
+      const pubDoc = doc(db, "shares", shareId, "items", d.id);
+      batch.set(
+        pubDoc,
+        {
+          title: it.title || "",
+          author: it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : ""),
+          authors: it.authors || null, // keep array too if you have it
+          isbn: it.isbn || "",
+          image: it.image || it.coverUrl || "",
+          addedAt: it.addedAt || serverTimestamp(),
+        },
+        { merge: true }
+      );
+      ops++;
+      // Safety: commit mid-page if we ever exceed ~450 writes (very unlikely here)
+      if (ops >= 450) {
+        // no-op; we’re under 400 per page, but kept for future-proofing
+      }
+    });
+
+    // also bump parent share updatedAt
+    batch.set(
+      doc(db, "shares", shareId),
+      { updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+
+    await batch.commit();
+    last = snap.docs[snap.docs.length - 1];
+    if (snap.size < 400) break;
+  }
+}
+
+/* ===================================================================
+   INTERNAL: delete shares/{shareId}/items/* then the share doc
+   =================================================================== */
+async function deleteShareTree(shareId) {
+  // delete items in pages
+  const itemsCol = collection(db, "shares", shareId, "items");
+  while (true) {
+    const page = await getDocs(query(itemsCol, limit(400)));
+    if (page.empty) break;
+    const batch = writeBatch(db);
+    page.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    if (page.size < 400) break;
+  }
+  // delete parent share doc
+  await deleteDoc(doc(db, "shares", shareId));
+}
+
+/* ===================================================================
+   (Optional) create a list – included for completeness
+   =================================================================== */
+export async function createList(uid, name) {
+  const ref = await addDoc(collection(db, "users", uid, "wishlists"), {
+    name: name || "Wishlist",
     isPublic: false,
     shareId: null,
-  }, { merge: true });
-  return id;
-}
-
-export async function renameList(uid, listId, newName) {
-  await updateDoc(doc(db, "users", uid, "wishlists", listId), {
-    name: newName,
+    itemCount: 0,
+    createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
-}
-
-export async function deleteList(uid, listId) {
-  await deleteDoc(doc(db, "users", uid, "wishlists", listId));
-}
-
-/** Upsert item at key = book.isbn (if you want a different key, pass it as id) */
-export async function addItem(uid, listId, book, idMaybe) {
-  const itemId = idMaybe || String(book.isbn || crypto.randomUUID?.() || Math.random().toString(36).slice(2));
-  const itemRef = doc(db, "users", uid, "wishlists", listId, "items", itemId);
-  await setDoc(itemRef, {
-    ...book,
-    addedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  }, { merge: true });
-
-  // bump list updatedAt
-  await updateDoc(doc(db, "users", uid, "wishlists", listId), { updatedAt: serverTimestamp() });
-}
-
-/** Delete by *document id* (reliable). */
-export async function removeItemById(uid, listId, itemId) {
-  await deleteDoc(doc(db, "users", uid, "wishlists", listId, "items", itemId));
-  await updateDoc(doc(db, "users", uid, "wishlists", listId), { updatedAt: serverTimestamp() });
-}
-
-/** Back-compat: delete by isbn or id (just forwards to removeItemById). */
-export async function removeItem(uid, listId, isbnOrId) {
-  return removeItemById(uid, listId, String(isbnOrId));
-}
-
-/** Toggle public share and return shareId (or null if made private) */
-export async function togglePublic(uid, listId, on) {
-  const listRef = doc(db, "users", uid, "wishlists", listId);
-  let shareId = null;
-
-  if (on) {
-    shareId = makeShareId(10);
-    await setDoc(listRef, { isPublic: true, shareId, updatedAt: serverTimestamp() }, { merge: true });
-    await setDoc(doc(db, "publicWishlists", shareId), { ownerUid: uid, listId, createdAt: serverTimestamp() });
-  } else {
-    const snap = await getDoc(listRef);
-    shareId = snap.exists() ? snap.data()?.shareId || null : null;
-    await setDoc(listRef, { isPublic: false, shareId: null, updatedAt: serverTimestamp() }, { merge: true });
-    // (optional) delete the mapping doc here if you want to revoke the old shareId
-  }
-  return shareId;
-}
-
-/** Resolve shareId → { ownerUid, listId } */
-export async function getPublicMapping(shareId) {
-  const snap = await getDoc(doc(db, "publicWishlists", shareId));
-  return snap.exists() ? snap.data() : null;
+  return ref.id;
 }
