@@ -57,9 +57,14 @@ export default function ScanPage() {
   const [lastCode, setLastCode] = useState("");
   const [firestoreError, setFirestoreError] = useState("");
 
-  // Finder box (visual target)
-  const FINDER_WIDTH = 320;
-  const FINDER_HEIGHT = 140;
+  // ====== Finder size (30% larger) ======
+  const FINDER_SCALE = 1.3;
+  const BASE_FINDER_WIDTH = 320;
+  const BASE_FINDER_HEIGHT = 140;
+  const FINDER_WIDTH = Math.round(BASE_FINDER_WIDTH * FINDER_SCALE);
+  const FINDER_HEIGHT = Math.round(BASE_FINDER_HEIGHT * FINDER_SCALE);
+  const BASE_BOX_MAX_W = 420; // previous cap for video container
+  const BOX_MAX_W = Math.round(BASE_BOX_MAX_W * FINDER_SCALE); // scale container cap too
 
   const lastScanRef = useRef({ code: "", t: 0 });
 
@@ -192,15 +197,13 @@ export default function ScanPage() {
     try {
       const pickedId = await pickBackCameraId();
 
-      // Request back/environment camera at decent resolution.
-      // CSS will ensure the preview fills the box.
+      // Request back/environment camera; CSS ensures it fills the box.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           ...(pickedId ? { deviceId: { exact: pickedId } } : { facingMode: { ideal: "environment" } }),
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          // Suggest the aspect; some browsers ignore this.
-          aspectRatio: FINDER_WIDTH / FINDER_HEIGHT,
+          aspectRatio: FINDER_WIDTH / FINDER_HEIGHT, // hint only; CSS does the real fit
         },
         audio: false,
       });
@@ -408,6 +411,7 @@ export default function ScanPage() {
 
   return (
     <main style={{ padding: 16, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
+      {/* Prevent input zoom (also see global style at bottom) */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <button className="cc-btn-outline" onClick={() => history.back()}>
           ← Back
@@ -428,7 +432,7 @@ export default function ScanPage() {
           <select
             value={selectedListId}
             onChange={(e) => setSelectedListId(e.target.value)}
-            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", minWidth: 170 }}
+            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", minWidth: 170, fontSize: 16 }}
           >
             {!lists.length && <option value="">(creating…)</option>}
             {lists.map((l) => (
@@ -444,12 +448,12 @@ export default function ScanPage() {
       </div>
 
       <div className="cc-card" style={{ display: "grid", gap: 10 }}>
-        {/* Fixed-aspect container that matches the finder box; video fills it */}
+        {/* Fixed-aspect container that matches the (bigger) finder box; video fills it */}
         <div
           style={{
             position: "relative",
             width: "100%",
-            maxWidth: 420,
+            maxWidth: BOX_MAX_W,
             margin: "0 auto",
             aspectRatio: `${FINDER_WIDTH} / ${FINDER_HEIGHT}`,
             borderRadius: 12,
@@ -472,7 +476,7 @@ export default function ScanPage() {
             }}
           />
 
-          {/* Overlay with finder */}
+          {/* Overlay with (bigger) finder */}
           <div
             aria-hidden
             style={{
@@ -487,7 +491,7 @@ export default function ScanPage() {
               style={{
                 position: "relative",
                 width: FINDER_WIDTH,
-                maxWidth: "90%",
+                maxWidth: "95%",
                 height: FINDER_HEIGHT,
               }}
             >
@@ -563,7 +567,7 @@ export default function ScanPage() {
                   left: "50%",
                   transform: "translateX(-50%)",
                   top: 4,
-                  width: Math.min(FINDER_WIDTH - 12, 300),
+                  width: Math.min(FINDER_WIDTH - 12, 300 * FINDER_SCALE),
                   height: 2,
                   background: "rgba(207,172,120,0.95)",
                   boxShadow: "0 0 12px rgba(207,172,120,0.9)",
@@ -622,7 +626,12 @@ export default function ScanPage() {
             inputMode="numeric"
             pattern="[0-9]*"
             required
-            style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #ccc" }}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid #ccc",
+              fontSize: 16, // prevent mobile zoom
+            }}
           />
           <button className="cc-btn" type="submit">
             Add ISBN
@@ -630,7 +639,7 @@ export default function ScanPage() {
         </form>
       </div>
 
-      {/* Animations */}
+      {/* Animations + mobile zoom prevention */}
       <style jsx>{`
         @keyframes ccScanLine {
           0% {
@@ -647,6 +656,12 @@ export default function ScanPage() {
             transform: translate(-50%, ${FINDER_HEIGHT - 8}px);
             opacity: 0.35;
           }
+        }
+        /* Prevent mobile zoom on form controls */
+        :global(input),
+        :global(select),
+        :global(textarea) {
+          font-size: 16px;
         }
       `}</style>
     </main>
