@@ -57,16 +57,15 @@ export default function ScanPage() {
   const [lastCode, setLastCode] = useState("");
   const [firestoreError, setFirestoreError] = useState("");
 
-  // ====== 30% bigger screen + finder ======
-  const FINDER_SCALE = 1.3;           // tweak this if you want more/less than 30%
-  const BASE_FINDER_WIDTH = 320;
-  const BASE_FINDER_HEIGHT = 140;
-  const FINDER_WIDTH = Math.round(BASE_FINDER_WIDTH * FINDER_SCALE);
-  const FINDER_HEIGHT = Math.round(BASE_FINDER_HEIGHT * FINDER_SCALE);
+  // ===== Sizes =====
+  // Finder (animation area) — keep original size
+  const FINDER_WIDTH = 320;
+  const FINDER_HEIGHT = 140;
 
-  // Base camera “screen” width was ~420px; grow it by the same 30%
-  const BASE_BOX_WIDTH_PX = 420;
-  const BOX_WIDTH_PX = Math.round(BASE_BOX_WIDTH_PX * FINDER_SCALE); // 546px
+  // Make the CAMERA PREVIEW 30% taller (same width cap, taller box)
+  const TALLEN = 1.3; // 30% taller
+  const PREVIEW_MAX_WIDTH = 420; // unchanged (prevents sticking out)
+  const PREVIEW_ASPECT = `${FINDER_WIDTH} / ${Math.round(FINDER_HEIGHT * TALLEN)}`; // lower AR => taller
 
   const lastScanRef = useRef({ code: "", t: 0 });
 
@@ -134,7 +133,6 @@ export default function ScanPage() {
     try {
       if (backDeviceIdRef.current) return backDeviceIdRef.current;
 
-      // First enumerate; labels may be empty until permission granted
       const inputs = await BrowserMultiFormatReader.listVideoInputDevices();
       let chosen =
         inputs.find((d) => {
@@ -143,7 +141,6 @@ export default function ScanPage() {
         }) || inputs[0];
 
       if (!chosen || !chosen.deviceId) {
-        // Prompt for environment, then re-enumerate to get labels
         const tmp = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: "environment" } },
           audio: false,
@@ -199,13 +196,13 @@ export default function ScanPage() {
     try {
       const pickedId = await pickBackCameraId();
 
-      // Request back/environment camera; CSS ensures it fills the box.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           ...(pickedId ? { deviceId: { exact: pickedId } } : { facingMode: { ideal: "environment" } }),
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          aspectRatio: FINDER_WIDTH / FINDER_HEIGHT, // hint only; CSS does the real fit
+          // hint only; CSS controls visible aspect
+          aspectRatio: FINDER_WIDTH / (FINDER_HEIGHT * TALLEN),
         },
         audio: false,
       });
@@ -245,7 +242,7 @@ export default function ScanPage() {
 
           // Visible size for scaling ROI from CSS pixels to video pixels
           const cssW = video.clientWidth || FINDER_WIDTH;
-          const cssH = video.clientHeight || FINDER_HEIGHT;
+          const cssH = video.clientHeight || Math.round(FINDER_HEIGHT * TALLEN);
 
           const scaleX = vw / cssW;
           const scaleY = vh / cssH;
@@ -273,7 +270,6 @@ export default function ScanPage() {
         };
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        // ZXing fallback (still uses the single picked device)
         await zxingRef.current.decodeFromVideoDevice(pickedId || undefined, videoRef.current, (result) => {
           if (!result) return;
           handleDetected(result.getText());
@@ -449,13 +445,14 @@ export default function ScanPage() {
       </div>
 
       <div className="cc-card" style={{ display: "grid", gap: 10 }}>
-        {/* Camera container: 30% wider + responsive to viewport */}
+        {/* Camera container: same width, 30% taller */}
         <div
           style={{
             position: "relative",
-            width: `min(95vw, ${BOX_WIDTH_PX}px)`, // 👈 makes the whole "screen" larger
+            width: "100%",
+            maxWidth: PREVIEW_MAX_WIDTH, // prevents sticking out to the right
             margin: "0 auto",
-            aspectRatio: `${FINDER_WIDTH} / ${FINDER_HEIGHT}`, // height grows with width
+            aspectRatio: PREVIEW_ASPECT, // ⬅️ taller box
             borderRadius: 12,
             overflow: "hidden",
             background: "#000",
@@ -476,106 +473,138 @@ export default function ScanPage() {
             }}
           />
 
-          {/* Overlay with (bigger) finder */}
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              display: "grid",
-              placeItems: "center",
-              pointerEvents: "none",
-            }}
-          >
+          {/* Dim outside of finder with 4 side overlays (center remains bright) */}
+          <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+            {/* compute paddings visually by placing the finder first */}
             <div
               style={{
-                position: "relative",
+                position: "absolute",
+                left: "50%",
+                top: "50%",
                 width: FINDER_WIDTH,
-                maxWidth: "95%",
                 height: FINDER_HEIGHT,
+                transform: "translate(-50%, -50%)",
               }}
             >
-              {/* Dim outside of finder */}
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  background: "rgba(0,0,0,0.45)",
-                  WebkitMask: "linear-gradient(#000, #000)",
-                  maskComposite: "exclude",
-                  WebkitMaskComposite: "destination-out",
-                }}
-              />
-              {/* Finder box */}
-              <div
-                style={{
-                  position: "absolute",
-                  left: "50%",
-                  top: "50%",
-                  width: FINDER_WIDTH,
-                  height: FINDER_HEIGHT,
-                  transform: "translate(-50%, -50%)",
-                  background: "transparent",
-                  borderRadius: 12,
-                  boxShadow: "0 0 0 2px rgba(255,255,255,0.95) inset",
-                }}
-              />
-              {/* Corner accents */}
-              {["tl", "tr", "bl", "br"].map((pos) => (
-                <span
-                  key={pos}
-                  style={{
-                    position: "absolute",
-                    width: 22,
-                    height: 22,
-                    borderColor: "rgba(255,255,255,0.95)",
-                    ...(pos === "tl" && {
-                      top: -2,
-                      left: -2,
-                      borderTopWidth: 4,
-                      borderLeftWidth: 4,
-                      borderStyle: "solid",
-                    }),
-                    ...(pos === "tr" && {
-                      top: -2,
-                      right: -2,
-                      borderTopWidth: 4,
-                      borderRightWidth: 4,
-                      borderStyle: "solid",
-                    }),
-                    ...(pos === "bl" && {
-                      bottom: -2,
-                      left: -2,
-                      borderBottomWidth: 4,
-                      borderLeftWidth: 4,
-                      borderStyle: "solid",
-                    }),
-                    ...(pos === "br" && {
-                      bottom: -2,
-                      right: -2,
-                      borderBottomWidth: 4,
-                      borderRightWidth: 4,
-                      borderStyle: "solid",
-                    }),
-                  }}
-                />
-              ))}
-              {/* Animated scan line */}
-              <span
-                style={{
-                  position: "absolute",
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  top: 4,
-                  width: Math.min(FINDER_WIDTH - 12, 300 * FINDER_SCALE),
-                  height: 2,
-                  background: "rgba(207,172,120,0.95)",
-                  boxShadow: "0 0 12px rgba(207,172,120,0.9)",
-                  borderRadius: 2,
-                  animation: "ccScanLine 1100ms linear infinite",
-                }}
-              />
+              {/* Corners + border + scan line live on top; we’ll draw dim panels around this box */}
             </div>
+
+            {/* Panels to darken outside (slightly) */}
+            {/* Top */}
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: 0,
+                height: `calc(50% - ${FINDER_HEIGHT / 2}px)`,
+                background: "rgba(0,0,0,0.28)",
+              }}
+            />
+            {/* Bottom */}
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: `calc(50% - ${FINDER_HEIGHT / 2}px)`,
+                background: "rgba(0,0,0,0.28)",
+              }}
+            />
+            {/* Left */}
+            <div
+              style={{
+                position: "absolute",
+                top: `calc(50% - ${FINDER_HEIGHT / 2}px)`,
+                bottom: `calc(50% - ${FINDER_HEIGHT / 2}px)`,
+                left: 0,
+                width: `calc(50% - ${FINDER_WIDTH / 2}px)`,
+                background: "rgba(0,0,0,0.28)",
+              }}
+            />
+            {/* Right */}
+            <div
+              style={{
+                position: "absolute",
+                top: `calc(50% - ${FINDER_HEIGHT / 2}px)`,
+                bottom: `calc(50% - ${FINDER_HEIGHT / 2}px)`,
+                right: 0,
+                width: `calc(50% - ${FINDER_WIDTH / 2}px)`,
+                background: "rgba(0,0,0,0.28)",
+              }}
+            />
+
+            {/* Finder outline (center kept bright/clear) */}
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: "50%",
+                width: FINDER_WIDTH,
+                height: FINDER_HEIGHT,
+                transform: "translate(-50%, -50%)",
+                borderRadius: 12,
+                boxShadow: "0 0 0 2px rgba(255,255,255,0.9) inset",
+              }}
+            />
+
+            {/* Corner accents */}
+            {["tl", "tr", "bl", "br"].map((pos) => (
+              <span
+                key={pos}
+                style={{
+                  position: "absolute",
+                  width: 22,
+                  height: 22,
+                  borderColor: "rgba(255,255,255,0.95)",
+                  ...(pos === "tl" && {
+                    top: `calc(50% - ${FINDER_HEIGHT / 2 + 2}px)`,
+                    left: `calc(50% - ${FINDER_WIDTH / 2 + 2}px)`,
+                    borderTopWidth: 4,
+                    borderLeftWidth: 4,
+                    borderStyle: "solid",
+                  }),
+                  ...(pos === "tr" && {
+                    top: `calc(50% - ${FINDER_HEIGHT / 2 + 2}px)`,
+                    right: `calc(50% - ${FINDER_WIDTH / 2 + 2}px)`,
+                    borderTopWidth: 4,
+                    borderRightWidth: 4,
+                    borderStyle: "solid",
+                  }),
+                  ...(pos === "bl" && {
+                    bottom: `calc(50% - ${FINDER_HEIGHT / 2 + 2}px)`,
+                    left: `calc(50% - ${FINDER_WIDTH / 2 + 2}px)`,
+                    borderBottomWidth: 4,
+                    borderLeftWidth: 4,
+                    borderStyle: "solid",
+                  }),
+                  ...(pos === "br" && {
+                    bottom: `calc(50% - ${FINDER_HEIGHT / 2 + 2}px)`,
+                    right: `calc(50% - ${FINDER_WIDTH / 2 + 2}px)`,
+                    borderBottomWidth: 4,
+                    borderRightWidth: 4,
+                    borderStyle: "solid",
+                  }),
+                }}
+              />
+            ))}
+
+            {/* Animated scan line (center is bright; outside is slightly dimmed) */}
+            <span
+              style={{
+                position: "absolute",
+                left: "50%",
+                transform: "translateX(-50%)",
+                top: `calc(50% - ${FINDER_HEIGHT / 2 - 4}px)`,
+                width: Math.min(FINDER_WIDTH - 12, 300),
+                height: 2,
+                background: "rgba(207,172,120,0.95)",
+                boxShadow: "0 0 12px rgba(207,172,120,0.9)",
+                borderRadius: 2,
+                animation: "ccScanLine 1100ms linear infinite",
+              }}
+            />
           </div>
         </div>
 
@@ -639,7 +668,7 @@ export default function ScanPage() {
         </form>
       </div>
 
-      {/* Animations + mobile zoom prevention */}
+      {/* Animations */}
       <style jsx>{`
         @keyframes ccScanLine {
           0% {
