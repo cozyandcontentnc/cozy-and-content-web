@@ -57,14 +57,16 @@ export default function ScanPage() {
   const [lastCode, setLastCode] = useState("");
   const [firestoreError, setFirestoreError] = useState("");
 
-  // ====== Finder size (30% larger) ======
-  const FINDER_SCALE = 1.3;
+  // ====== 30% bigger screen + finder ======
+  const FINDER_SCALE = 1.3;           // tweak this if you want more/less than 30%
   const BASE_FINDER_WIDTH = 320;
   const BASE_FINDER_HEIGHT = 140;
   const FINDER_WIDTH = Math.round(BASE_FINDER_WIDTH * FINDER_SCALE);
   const FINDER_HEIGHT = Math.round(BASE_FINDER_HEIGHT * FINDER_SCALE);
-  const BASE_BOX_MAX_W = 420; // previous cap for video container
-  const BOX_MAX_W = Math.round(BASE_BOX_MAX_W * FINDER_SCALE); // scale container cap too
+
+  // Base camera “screen” width was ~420px; grow it by the same 30%
+  const BASE_BOX_WIDTH_PX = 420;
+  const BOX_WIDTH_PX = Math.round(BASE_BOX_WIDTH_PX * FINDER_SCALE); // 546px
 
   const lastScanRef = useRef({ code: "", t: 0 });
 
@@ -411,7 +413,6 @@ export default function ScanPage() {
 
   return (
     <main style={{ padding: 16, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
-      {/* Prevent input zoom (also see global style at bottom) */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <button className="cc-btn-outline" onClick={() => history.back()}>
           ← Back
@@ -448,14 +449,13 @@ export default function ScanPage() {
       </div>
 
       <div className="cc-card" style={{ display: "grid", gap: 10 }}>
-        {/* Fixed-aspect container that matches the (bigger) finder box; video fills it */}
+        {/* Camera container: 30% wider + responsive to viewport */}
         <div
           style={{
             position: "relative",
-            width: "100%",
-            maxWidth: BOX_MAX_W,
+            width: `min(95vw, ${BOX_WIDTH_PX}px)`, // 👈 makes the whole "screen" larger
             margin: "0 auto",
-            aspectRatio: `${FINDER_WIDTH} / ${FINDER_HEIGHT}`,
+            aspectRatio: `${FINDER_WIDTH} / ${FINDER_HEIGHT}`, // height grows with width
             borderRadius: 12,
             overflow: "hidden",
             background: "#000",
@@ -471,7 +471,7 @@ export default function ScanPage() {
               inset: 0,
               width: "100%",
               height: "100%",
-              objectFit: "cover", // fill the box; center-crop if needed
+              objectFit: "cover",
               display: "block",
             }}
           />
@@ -615,7 +615,7 @@ export default function ScanPage() {
             display: "grid",
             gridTemplateColumns: "1fr auto",
             gap: 8,
-            maxWidth: 420,
+            maxWidth: 600,
             margin: "0 auto",
           }}
         >
