@@ -43,6 +43,7 @@ export default function ScanPage() {
   const detectorRef = useRef(null);
   const zxingRef = useRef(null);
   const canvasRef = useRef(null);
+  const backDeviceIdRef = useRef(null);
 
   const [uid, setUid] = useState(null);
 
@@ -55,12 +56,10 @@ export default function ScanPage() {
   const [status, setStatus] = useState("Tap Start to enable the camera");
   const [lastCode, setLastCode] = useState("");
   const [firestoreError, setFirestoreError] = useState("");
-  const [devices, setDevices] = useState([]);
-  const [deviceId, setDeviceId] = useState("");
 
-  // Finder box (you can tweak these)
+  // Finder box (visual target)
   const FINDER_WIDTH = 320;
-  const FINDER_HEIGHT = 140; // you said this is “almost a little too short”; bump to 150 if you want
+  const FINDER_HEIGHT = 140;
 
   const lastScanRef = useRef({ code: "", t: 0 });
 
@@ -84,7 +83,9 @@ export default function ScanPage() {
       if (!active) return;
       setUid(user?.uid || null);
     })();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Load lists & auto-create if none
@@ -93,7 +94,7 @@ export default function ScanPage() {
     const listsCol = collection(db, "users", uid, "wishlists");
     const qRef = query(listsCol, orderBy("updatedAt", "desc"));
     const unsub = onSnapshot(qRef, async (snap) => {
-      const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data()) }));
+      const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
       setLists(arr);
 
       if (!arr.length) {
@@ -121,24 +122,50 @@ export default function ScanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
 
-  // Enumerate cameras
-  async function refreshDevices() {
+  // Pick ONE back camera only
+  async function pickBackCameraId() {
     try {
-      const list = await BrowserMultiFormatReader.listVideoInputDevices();
-      setDevices(list);
-      const back =
-        list.find((d) =>
-          (d.label || "").toLowerCase().includes("back") ||
-          (d.label || "").toLowerCase().includes("rear") ||
-          (d.label || "").toLowerCase().includes("environment")
-        ) || list[0];
-      if (back && !deviceId) setDeviceId(back.deviceId);
-    } catch {}
+      if (backDeviceIdRef.current) return backDeviceIdRef.current;
+
+      // First enumerate; labels may be empty until permission granted
+      const inputs = await BrowserMultiFormatReader.listVideoInputDevices();
+      let chosen =
+        inputs.find((d) => {
+          const L = (d.label || "").toLowerCase();
+          return L.includes("back") || L.includes("rear") || L.includes("environment");
+        }) || inputs[0];
+
+      if (!chosen || !chosen.deviceId) {
+        // Prompt for environment, then re-enumerate to get labels
+        const tmp = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        tmp.getTracks().forEach((t) => t.stop());
+
+        const inputs2 = await BrowserMultiFormatReader.listVideoInputDevices();
+        chosen =
+          inputs2.find((d) => {
+            const L = (d.label || "").toLowerCase();
+            return L.includes("back") || L.includes("rear") || L.includes("environment");
+          }) || inputs2[0];
+      }
+
+      backDeviceIdRef.current = chosen?.deviceId || null;
+      return backDeviceIdRef.current;
+    } catch {
+      return null;
+    }
   }
 
   function stopStreams() {
-    try { zxingRef.current?.reset(); } catch {}
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    try {
+      zxingRef.current?.reset();
+    } catch {}
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
     const stream = videoRef.current?.srcObject;
     if (stream) stream.getTracks().forEach((t) => t.stop());
   }
@@ -163,40 +190,47 @@ export default function ScanPage() {
     setFirestoreError("");
 
     try {
-      // Request higher resolution; aspect handled by CSS
+      const pickedId = await pickBackCameraId();
+
+      // Request back/environment camera at decent resolution.
+      // CSS will ensure the preview fills the box.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          facingMode: deviceId ? undefined : { ideal: "environment" },
+          ...(pickedId ? { deviceId: { exact: pickedId } } : { facingMode: { ideal: "environment" } }),
           width: { ideal: 1280 },
           height: { ideal: 720 },
+          // Suggest the aspect; some browsers ignore this.
+          aspectRatio: FINDER_WIDTH / FINDER_HEIGHT,
         },
         audio: false,
       });
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        try { await videoRef.current.play(); } catch {}
-        tuneTrack(videoRef.current);
+        try {
+          await videoRef.current.play();
+        } catch {}
+        await tuneTrack(videoRef.current);
       }
 
-      await refreshDevices();
-
-      // Native detector on ROI (fast)
-      const NativeDetector = globalThis.BarcodeDetector;
+      // Native detector (if available)
+      detectorRef.current = null;
+      const NativeDetector = typeof window !== "undefined" ? window.BarcodeDetector : null;
       if (NativeDetector) {
         try {
-          detectorRef.current = new NativeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+          detectorRef.current = new NativeDetector({
+            formats: ["ean_13", "ean_8", "upc_a", "upc_e"],
+          });
         } catch {
           detectorRef.current = null;
         }
       }
 
+      if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
+
       if (detectorRef.current) {
         setRunning(true);
         setStatus("Center the barcode in the box");
-
-        if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
 
         const loop = async () => {
           if (!detectorRef.current || !videoRef.current) return;
@@ -204,9 +238,9 @@ export default function ScanPage() {
           const vw = video.videoWidth || 1280;
           const vh = video.videoHeight || 720;
 
-          // ROI: center, scaled based on finder size relative to CSS box vs video pixels
-          const cssW = video.clientWidth || 360;
-          const cssH = video.clientHeight || 240; // shorter now due to new aspect ratio
+          // Visible size for scaling ROI from CSS pixels to video pixels
+          const cssW = video.clientWidth || FINDER_WIDTH;
+          const cssH = video.clientHeight || FINDER_HEIGHT;
 
           const scaleX = vw / cssW;
           const scaleY = vh / cssH;
@@ -234,15 +268,11 @@ export default function ScanPage() {
         };
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        // ZXing fallback
-        await zxingRef.current.decodeFromVideoDevice(
-          deviceId || undefined,
-          videoRef.current,
-          (result /*, err */) => {
-            if (!result) return;
-            handleDetected(result.getText());
-          }
-        );
+        // ZXing fallback (still uses the single picked device)
+        await zxingRef.current.decodeFromVideoDevice(pickedId || undefined, videoRef.current, (result) => {
+          if (!result) return;
+          handleDetected(result.getText());
+        });
         setRunning(true);
         setStatus("Center the barcode in the box");
       }
@@ -301,8 +331,15 @@ export default function ScanPage() {
     setFirestoreError("");
 
     const book = await lookupBook(isbnDigits);
-    if (!book) { setStatus("Not found"); return; }
-    if (!uid) { setStatus("Not signed in."); setFirestoreError("auth/no-user"); return; }
+    if (!book) {
+      setStatus("Not found");
+      return;
+    }
+    if (!uid) {
+      setStatus("Not signed in.");
+      setFirestoreError("auth/no-user");
+      return;
+    }
 
     try {
       const listId = await ensureActiveList();
@@ -363,20 +400,29 @@ export default function ScanPage() {
 
   // Cleanup
   useEffect(() => {
-    return () => { stopScanner(); };
+    return () => {
+      stopScanner();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <main style={{ padding: 16, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <button className="cc-btn-outline" onClick={() => history.back()}>← Back</button>
+        <button className="cc-btn-outline" onClick={() => history.back()}>
+          ← Back
+        </button>
         <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Scan a Book</h1>
-        <a className="cc-btn-outline" href="/">Home</a>
+        <a className="cc-btn-outline" href="/">
+          Home
+        </a>
       </div>
 
       {/* Active list + New List button */}
-      <div className="cc-card" style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+      <div
+        className="cc-card"
+        style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}
+      >
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 14, opacity: 0.8 }}>Active list:</span>
           <select
@@ -386,51 +432,47 @@ export default function ScanPage() {
           >
             {!lists.length && <option value="">(creating…)</option>}
             {lists.map((l) => (
-              <option key={l.id} value={l.id}>{l.name || "Wishlist"}</option>
+              <option key={l.id} value={l.id}>
+                {l.name || "Wishlist"}
+              </option>
             ))}
           </select>
         </div>
-        <button className="cc-btn-outline" onClick={onCreateList}>➕ New List</button>
+        <button className="cc-btn-outline" onClick={onCreateList}>
+          ➕ New List
+        </button>
       </div>
 
       <div className="cc-card" style={{ display: "grid", gap: 10 }}>
-        {/* Camera picker if multiple */}
-        {devices.length > 1 && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
-            <label style={{ fontSize: 14, opacity: 0.8 }}>Camera:</label>
-            <select
-              value={deviceId}
-              onChange={(e) => setDeviceId(e.target.value)}
-              style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc" }}
-            >
-              {devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label || "Camera"}</option>
-              ))}
-            </select>
-            <button className="cc-btn-outline" onClick={() => { stopScanner(); startScanner(); }}>
-              Switch
-            </button>
-          </div>
-        )}
-
-        {/* Video (camera window is now ~half as tall via aspectRatio) */}
-        <div style={{ position: "relative", width: "100%", display: "grid", placeItems: "center" }}>
+        {/* Fixed-aspect container that matches the finder box; video fills it */}
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            maxWidth: 420,
+            margin: "0 auto",
+            aspectRatio: `${FINDER_WIDTH} / ${FINDER_HEIGHT}`,
+            borderRadius: 12,
+            overflow: "hidden",
+            background: "#000",
+          }}
+        >
           <video
             ref={videoRef}
             autoPlay
             muted
             playsInline
             style={{
+              position: "absolute",
+              inset: 0,
               width: "100%",
-              maxWidth: 360,         // width unchanged
-              aspectRatio: "3 / 2",  // 👈 shorter: half the previous 3/4 height
-              borderRadius: 12,
-              background: "#000",
+              height: "100%",
+              objectFit: "cover", // fill the box; center-crop if needed
               display: "block",
             }}
           />
 
-          {/* Inverted overlay: center bright, outside dim */}
+          {/* Overlay with finder */}
           <div
             aria-hidden
             style={{
@@ -449,7 +491,7 @@ export default function ScanPage() {
                 height: FINDER_HEIGHT,
               }}
             >
-              {/* Dim the outside; keep center bright */}
+              {/* Dim outside of finder */}
               <div
                 style={{
                   position: "absolute",
@@ -460,6 +502,7 @@ export default function ScanPage() {
                   WebkitMaskComposite: "destination-out",
                 }}
               />
+              {/* Finder box */}
               <div
                 style={{
                   position: "absolute",
@@ -474,7 +517,7 @@ export default function ScanPage() {
                 }}
               />
               {/* Corner accents */}
-              {["tl","tr","bl","br"].map((pos) => (
+              {["tl", "tr", "bl", "br"].map((pos) => (
                 <span
                   key={pos}
                   style={{
@@ -482,10 +525,34 @@ export default function ScanPage() {
                     width: 22,
                     height: 22,
                     borderColor: "rgba(255,255,255,0.95)",
-                    ...(pos === "tl" && { top: -2, left: -2, borderTopWidth: 4, borderLeftWidth: 4, borderStyle: "solid" }),
-                    ...(pos === "tr" && { top: -2, right: -2, borderTopWidth: 4, borderRightWidth: 4, borderStyle: "solid" }),
-                    ...(pos === "bl" && { bottom: -2, left: -2, borderBottomWidth: 4, borderLeftWidth: 4, borderStyle: "solid" }),
-                    ...(pos === "br" && { bottom: -2, right: -2, borderBottomWidth: 4, borderRightWidth: 4, borderStyle: "solid" }),
+                    ...(pos === "tl" && {
+                      top: -2,
+                      left: -2,
+                      borderTopWidth: 4,
+                      borderLeftWidth: 4,
+                      borderStyle: "solid",
+                    }),
+                    ...(pos === "tr" && {
+                      top: -2,
+                      right: -2,
+                      borderTopWidth: 4,
+                      borderRightWidth: 4,
+                      borderStyle: "solid",
+                    }),
+                    ...(pos === "bl" && {
+                      bottom: -2,
+                      left: -2,
+                      borderBottomWidth: 4,
+                      borderLeftWidth: 4,
+                      borderStyle: "solid",
+                    }),
+                    ...(pos === "br" && {
+                      bottom: -2,
+                      right: -2,
+                      borderBottomWidth: 4,
+                      borderRightWidth: 4,
+                      borderStyle: "solid",
+                    }),
                   }}
                 />
               ))}
@@ -510,16 +577,24 @@ export default function ScanPage() {
 
         <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
           {!running ? (
-            <button className="cc-btn" onClick={startScanner}>▶️ Start</button>
+            <button className="cc-btn" onClick={startScanner}>
+              ▶️ Start
+            </button>
           ) : (
-            <button className="cc-btn-outline" onClick={stopScanner}>⏹ Stop</button>
+            <button className="cc-btn-outline" onClick={stopScanner}>
+              ⏹ Stop
+            </button>
           )}
-          <a className="cc-btn-outline" href="/scan">↻ Reset</a>
+          <a className="cc-btn-outline" href="/scan">
+            ↻ Reset
+          </a>
         </div>
       </div>
 
       <div className="cc-card" style={{ marginTop: 12, display: "grid", gap: 6 }}>
-        <div>Last code: <strong>{lastCode || "—"}</strong></div>
+        <div>
+          Last code: <strong>{lastCode || "—"}</strong>
+        </div>
         <div style={{ color: "#555" }}>{status}</div>
         {firestoreError && (
           <div style={{ color: "#a33", fontSize: 12 }}>
@@ -530,7 +605,16 @@ export default function ScanPage() {
 
       {/* Manual ISBN entry (adds to active list) */}
       <div className="cc-card" style={{ marginTop: 12 }}>
-        <form onSubmit={onManualSubmit} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, maxWidth: 420, margin: "0 auto" }}>
+        <form
+          onSubmit={onManualSubmit}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr auto",
+            gap: 8,
+            maxWidth: 420,
+            margin: "0 auto",
+          }}
+        >
           <input
             value={manualIsbn}
             onChange={(e) => setManualIsbn(e.target.value)}
@@ -540,17 +624,29 @@ export default function ScanPage() {
             required
             style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #ccc" }}
           />
-          <button className="cc-btn" type="submit">Add ISBN</button>
+          <button className="cc-btn" type="submit">
+            Add ISBN
+          </button>
         </form>
       </div>
 
       {/* Animations */}
       <style jsx>{`
         @keyframes ccScanLine {
-          0%   { transform: translate(-50%, 0); opacity: 0.35; }
-          10%  { opacity: 1; }
-          90%  { opacity: 1; }
-          100% { transform: translate(-50%, ${FINDER_HEIGHT - 8}px); opacity: 0.35; }
+          0% {
+            transform: translate(-50%, 0);
+            opacity: 0.35;
+          }
+          10% {
+            opacity: 1;
+          }
+          90% {
+            opacity: 1;
+          }
+          100% {
+            transform: translate(-50%, ${FINDER_HEIGHT - 8}px);
+            opacity: 0.35;
+          }
         }
       `}</style>
     </main>

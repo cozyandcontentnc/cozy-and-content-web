@@ -33,9 +33,7 @@ export function saveOrder(items) {
 /**
  * Add one item locally AND (if possible) to Firestore:
  * item: {title, author, isbn, image, fromShareId, ownerUid, listId, itemId}
- * - Writes to BOTH:
- *   A) users/{uid}/requests          (status "new")
- *   B) users/{uid}/bookRequests      (status "requested")  <-- your /requests page reads this
+ * Writes to: users/{uid}/bookRequests (status "requested")
  */
 export async function addToOrder(item) {
   const now = Date.now();
@@ -48,59 +46,35 @@ export async function addToOrder(item) {
   if (!exists) current.unshift({ ...item, addedAt: now, purchased: false });
   saveOrder(current);
 
-  // 2) Firestore: try to write to both collections, return status flags
-  let wroteRequests = false;
-  let wroteBookRequests = false;
-
+  // 2) Firestore (single source: bookRequests)
   try {
     const user = await ensureAuth({ allowAnonymous: true });
-    if (!user?.uid) {
-      // no session; local-only
-      return { local: true, wroteRequests, wroteBookRequests, reason: "no-session" };
-    }
+    if (!user?.uid) return { local: true, wroteBookRequests: false, reason: "no-session" };
 
-    // A) users/{uid}/requests
-    try {
-      const reqCol = collection(db, "users", user.uid, "requests");
-      await addDoc(reqCol, {
-        ...item,
-        type: "book",
-        status: "new",
-        createdAt: serverTimestamp(),
-        fromShareId: item.fromShareId || null,
-      });
-      wroteRequests = true;
-    } catch (e) {
-      console.warn("[order] write to users/requests failed:", e?.code || e);
-    }
+    const bookReqs = collection(db, "users", user.uid, "bookRequests");
+    await addDoc(bookReqs, {
+      title: item.title || "",
+      author:
+        item.author ||
+        (Array.isArray(item.authors) ? item.authors.join(", ") : ""),
+      isbn: item.isbn || "",
+      image: item.image || "",
+      fromShareId: item.fromShareId || null,
+      ownerUid: item.ownerUid || null,
+      listId: item.listId || null,
+      itemId: item.itemId || null,
+      status: "requested",
+      type: "book",
+      createdAt: serverTimestamp(),
+    });
 
-    // B) users/{uid}/bookRequests  <-- /requests page reads this
-    try {
-      const bookReqs = collection(db, "users", user.uid, "bookRequests");
-      await addDoc(bookReqs, {
-        title: item.title || "",
-        author:
-          item.author ||
-          (Array.isArray(item.authors) ? item.authors.join(", ") : ""),
-        isbn: item.isbn || "",
-        image: item.image || "",
-        fromShareId: item.fromShareId || null,
-        ownerUid: item.ownerUid || null,
-        listId: item.listId || null,
-        itemId: item.itemId || null,
-        status: "requested",
-        type: "book",
-        createdAt: serverTimestamp(),
-      });
-      wroteBookRequests = true;
-    } catch (e) {
-      console.warn("[order] write to users/bookRequests failed:", e?.code || e);
-    }
-
-    return { local: true, wroteRequests, wroteBookRequests };
+    return { local: true, wroteBookRequests: true };
   } catch (e) {
-    // Unexpected (network/config) — surface it
-    return { local: true, wroteRequests, wroteBookRequests, error: e };
+    if (process.env.NODE_ENV !== "production") {
+      // eslint-disable-next-line no-console
+      console.warn("[order] Firestore write (bookRequests) failed:", e?.code || e);
+    }
+    return { local: true, wroteBookRequests: false, error: e };
   }
 }
 
@@ -141,15 +115,15 @@ export function buildMailto({ name, email, items }) {
 }
 
 /* ---------------------------
-   Optional Firestore helpers
+   Firestore helpers (bookRequests only)
 ----------------------------*/
 
-/** Live subscription to my Firestore requests (most recent first). */
+/** Live subscription to my bookRequests (most recent first). */
 export async function subscribeMyRequests(cb) {
   const user = await ensureAuth({ allowAnonymous: true });
   if (!user?.uid) throw new Error("No session");
   const qRef = query(
-    collection(db, "users", user.uid, "requests"),
+    collection(db, "users", user.uid, "bookRequests"),
     orderBy("createdAt", "desc")
   );
   return onSnapshot(qRef, (snap) => {
@@ -157,16 +131,16 @@ export async function subscribeMyRequests(cb) {
   });
 }
 
-/** Mark a request status (e.g., 'new' | 'emailed' | 'ordered' | 'done'). */
+/** Mark a request status (e.g., 'requested' | 'emailed' | 'ordered' | 'done'). */
 export async function setRequestStatus(reqId, status) {
   const user = await ensureAuth({ allowAnonymous: true });
   if (!user?.uid) throw new Error("No session");
-  await updateDoc(doc(db, "users", user.uid, "requests", reqId), { status });
+  await updateDoc(doc(db, "users", user.uid, "bookRequests", reqId), { status });
 }
 
-/** Delete a Firestore request. */
+/** Delete a book request. */
 export async function deleteRequest(reqId) {
   const user = await ensureAuth({ allowAnonymous: true });
   if (!user?.uid) throw new Error("No session");
-  await deleteDoc(doc(db, "users", user.uid, "requests", reqId));
+  await deleteDoc(doc(db, "users", user.uid, "bookRequests", reqId));
 }
