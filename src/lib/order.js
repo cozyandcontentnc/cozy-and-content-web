@@ -48,11 +48,19 @@ export async function addToOrder(item) {
   if (!exists) current.unshift({ ...item, addedAt: now, purchased: false });
   saveOrder(current);
 
-  // 2) Firestore (best-effort): write to *both* paths
+  // 2) Firestore: try to write to both collections, return status flags
+  let wroteRequests = false;
+  let wroteBookRequests = false;
+
   try {
     const user = await ensureAuth({ allowAnonymous: true });
-    if (user?.uid) {
-      // A) Generic requests collection
+    if (!user?.uid) {
+      // no session; local-only
+      return { local: true, wroteRequests, wroteBookRequests, reason: "no-session" };
+    }
+
+    // A) users/{uid}/requests
+    try {
       const reqCol = collection(db, "users", user.uid, "requests");
       await addDoc(reqCol, {
         ...item,
@@ -61,8 +69,13 @@ export async function addToOrder(item) {
         createdAt: serverTimestamp(),
         fromShareId: item.fromShareId || null,
       });
+      wroteRequests = true;
+    } catch (e) {
+      console.warn("[order] write to users/requests failed:", e?.code || e);
+    }
 
-      // B) Book requests collection (your /requests page subscribes here)
+    // B) users/{uid}/bookRequests  <-- /requests page reads this
+    try {
       const bookReqs = collection(db, "users", user.uid, "bookRequests");
       await addDoc(bookReqs, {
         title: item.title || "",
@@ -79,15 +92,16 @@ export async function addToOrder(item) {
         type: "book",
         createdAt: serverTimestamp(),
       });
+      wroteBookRequests = true;
+    } catch (e) {
+      console.warn("[order] write to users/bookRequests failed:", e?.code || e);
     }
-  } catch (e) {
-    if (process.env.NODE_ENV !== "production") {
-      // eslint-disable-next-line no-console
-      console.warn("[order] Firestore write skipped:", e?.code || e);
-    }
-  }
 
-  return current;
+    return { local: true, wroteRequests, wroteBookRequests };
+  } catch (e) {
+    // Unexpected (network/config) — surface it
+    return { local: true, wroteRequests, wroteBookRequests, error: e };
+  }
 }
 
 export function removeFromOrder(index) {

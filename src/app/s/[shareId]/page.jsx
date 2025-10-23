@@ -17,17 +17,57 @@ import {
 } from "firebase/firestore";
 
 /**
- * Helper: add a single item into the viewer's Requests inbox
- * (Keeps this page self-contained even if your addToOrder() helper changes)
+ * Helper: write to BOTH destinations used in your app:
+ *   A) users/{viewerUid}/requests       (status: "new")
+ *   B) users/{viewerUid}/bookRequests   (status: "requested")  <-- /requests page reads this
+ * Returns { wroteRequests, wroteBookRequests, error? }
  */
-async function addToRequests(viewerUid, payload) {
-  const inbox = collection(db, "users", viewerUid, "requests");
-  await addDoc(inbox, {
-    ...payload,
-    createdAt: serverTimestamp(),
-    source: "share",
-    status: "new",
-  });
+async function addToRequestsBoth(viewerUid, payload) {
+  let wroteRequests = false;
+  let wroteBookRequests = false;
+  let lastError = null;
+
+  // A) generic "requests"
+  try {
+    const inbox = collection(db, "users", viewerUid, "requests");
+    await addDoc(inbox, {
+      ...payload,
+      createdAt: serverTimestamp(),
+      source: "share",
+      status: "new",
+      type: payload?.type || "book",
+    });
+    wroteRequests = true;
+  } catch (e) {
+    console.warn("[share] write to users/requests failed:", e?.code || e);
+    lastError = e;
+  }
+
+  // B) bookRequests (the collection your Requests page subscribes to)
+  try {
+    const bookReqs = collection(db, "users", viewerUid, "bookRequests");
+    await addDoc(bookReqs, {
+      title: payload.title || "",
+      author:
+        payload.author ||
+        (Array.isArray(payload.authors) ? payload.authors.join(", ") : ""),
+      isbn: payload.isbn || "",
+      image: payload.image || payload.coverUrl || "",
+      fromShareId: payload.fromShareId || null,
+      ownerUid: payload.ownerUid || null,
+      listId: payload.listId || null,
+      itemId: payload.itemId || null,
+      status: "requested",
+      type: payload?.type || "book",
+      createdAt: serverTimestamp(),
+    });
+    wroteBookRequests = true;
+  } catch (e) {
+    console.warn("[share] write to users/bookRequests failed:", e?.code || e);
+    lastError = e;
+  }
+
+  return { wroteRequests, wroteBookRequests, error: lastError || undefined };
 }
 
 export default function PublicSharePage() {
@@ -92,7 +132,6 @@ export default function PublicSharePage() {
             loaded = ownerSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
           } catch (e) {
             // Cross-user read blocked — still usable for single-item add by id.
-            // We’ll show a light UI and let ?item= flow proceed with minimal fields.
           }
         }
 
@@ -108,7 +147,7 @@ export default function PublicSharePage() {
             // minimal stub if we couldn’t read details
             { id: focusItem, title: "", author: "", isbn: "", image: "" };
 
-          await addToRequests(user.uid, {
+          const result = await addToRequestsBoth(user.uid, {
             type: "book",
             fromShareId: shareId,
             ownerUid: map.ownerUid,
@@ -121,6 +160,12 @@ export default function PublicSharePage() {
             isbn: found.isbn || "",
             image: found.image || found.coverUrl || "",
           });
+
+          if (!result.wroteBookRequests) {
+            console.warn("[share] Added locally / to users/requests, but bookRequests write failed.");
+            setStatus("Saved, but not showing in Requests list. Check your console for details.");
+            setTimeout(() => setStatus(""), 2000);
+          }
 
           router.replace("/requests");
         }
@@ -177,7 +222,7 @@ export default function PublicSharePage() {
                 className="cc-btn"
                 onClick={async () => {
                   if (!viewerUid) return;
-                  await addToRequests(viewerUid, {
+                  const res = await addToRequestsBoth(viewerUid, {
                     type: "book",
                     fromShareId: shareId,
                     ownerUid: mapping?.ownerUid,
@@ -190,7 +235,15 @@ export default function PublicSharePage() {
                     isbn: b.isbn || "",
                     image: b.image || b.coverUrl || "",
                   });
-                  setStatus("Added to your Requests.");
+
+                  if (res.error) {
+                    setStatus("Could not save to Requests. See console.");
+                    console.error(res.error);
+                  } else if (!res.wroteBookRequests) {
+                    setStatus("Saved, but not showing in Requests. See console.");
+                  } else {
+                    setStatus("Added to your Requests.");
+                  }
                   setTimeout(() => setStatus(""), 1500);
                 }}
               >
