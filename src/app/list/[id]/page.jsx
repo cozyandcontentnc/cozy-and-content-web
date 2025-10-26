@@ -121,47 +121,39 @@ export default function ListPage() {
     return "";
   }
 
-  // --- Friendly share helpers ---
-  function composeShareFields({ kind, item, listName, userName, url, listUrl }) {
-    const sender = userName || "a Cozy & Content friend";
-    const by = item?.author ? ` by ${item.author}` : "";
-    const titleLine =
-      kind === "book"
-        ? `A book rec from ${sender} 📚`
-        : `A wishlist from ${sender} 📝`;
+ function composeShareFields({ kind, item, listName, userName, url, listUrl }) {
+  const sender = userName || "a Cozy & Content friend";
+  const by = item?.author ? ` by ${item.author}` : "";
+  const titleLine =
+    kind === "book"
+      ? `A book rec from ${sender} 📚`
+      : `A wishlist from ${sender} 📝`;
 
-    let body =
-      kind === "book"
-        ? [
-            `Hi there!`,
-            ``,
-            `${sender} would really love this book:`,
-            `${item?.title || "Book"}${by}`,
-            ``,
-            `You can check it out here: ${url}`,
-            ``,
-            `If you end up grabbing it, let them know so they can mark it as purchased.`,
-            listUrl ? `` : ``,
-            listUrl ? `See their full wishlist: ${listUrl}` : ``,
-            ``,
-            `— Sent from Cozy & Content Wishlists`,
-          ]
-        : [
-            `Hi there!`,
-            ``,
-            `${sender} shared a wishlist with you:`,
-            `${listName || "Wishlist"}`,
-            ``,
-            `View it here: ${url}`,
-            ``,
-            `If you pick anything up from this list, please give them a heads-up so they can mark it as purchased.`,
-            ``,
-            `— Sent from Cozy & Content Wishlists`,
-          ];
+  const lineBreak = "\n\n"; // double newline for readable paragraphs
 
-    body = body.filter(Boolean).join("\n");
-    return { title: titleLine, text: body };
-  }
+  let body =
+    kind === "book"
+      ? [
+          `Hi there!`,
+          `${sender} would really love this book:${lineBreak}${item?.title || "Book"}${by}`,
+          `You can check it out here:${lineBreak}${url}`,
+          `If you end up grabbing it, let them know so they can mark it as purchased.`,
+          listUrl ? `See their full wishlist:${lineBreak}${listUrl}` : "",
+          `— Sent from Cozy & Content Wishlists`,
+        ]
+      : [
+          `Hi there!`,
+          `${sender} shared a wishlist with you:${lineBreak}${listName || "Wishlist"}`,
+          `View it here:${lineBreak}${url}`,
+          `If you pick anything up from this list, please give them a heads-up so they can mark it as purchased.`,
+          `— Sent from Cozy & Content Wishlists`,
+        ];
+
+  // Filter out empties and join with two newlines
+  body = body.filter(Boolean).join("\n\n");
+
+  return { title: titleLine, text: body };
+}
 
   function shareList() {
     if (!list?.shareId) {
