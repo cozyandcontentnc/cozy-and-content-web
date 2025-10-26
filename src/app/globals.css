@@ -77,8 +77,8 @@ select.cc-card {
   margin-bottom: 16px;
 }
 
-.wishlist-actions button,
-.wishlist-actions a {
+.wishlist-actions > button,
+.wishlist-actions > a {
   background: var(--cc-accent);
   color: #fff;
   border: none;
@@ -94,8 +94,8 @@ select.cc-card {
   white-space: nowrap;
 }
 
-.wishlist-actions button:hover,
-.wishlist-actions a:hover {
+.wishlist-actions > button:hover,
+.wishlist-actions > a:hover {
   background: #b85f36;
 }
 
@@ -124,9 +124,9 @@ select.cc-card {
 
 /* Responsive adjustment for small screens */
 @media (max-width: 480px) {
-  .wishlist-actions button,
-  .wishlist-actions a,
-  .wishlist-actions > div {
+.wishlist-actions > button,
+.wishlist-actions > a,
+.wishlist-actions > div {
     width: 48%;
     flex: none;
   }
