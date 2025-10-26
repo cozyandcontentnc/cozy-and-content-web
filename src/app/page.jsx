@@ -107,6 +107,31 @@ export default function Page() {
         </Link>
       </div>
 
+<div style={{ marginBottom: 32 }}>
+<a
+  href={`mailto:cozyandcontentnc@gmail.com?subject=Wishlist%20App%20Feedback&body=Hi%20Cozy%20and%20Content!%0D%0A%0D%0AI%20wanted%20to%20report%20a%20bug%20or%20share%20some%20feedback:%0D%0A%0D%0A`}
+  style={{ textDecoration: "none" }}
+>
+    <button
+      style={{
+        padding: "12px 18px",
+        fontSize: 16,
+        backgroundColor: "#fff",
+        color: "#365c4a",
+        border: "2px solid #365c4a",
+        borderRadius: 8,
+        cursor: "pointer",
+        fontWeight: 700,
+      }}
+    >
+      ✉️ Contact Us
+    </button>
+  </a>
+  <p style={{ color: "#666", fontSize: 13, marginTop: 6 }}>
+    Something not working right? Tap here to email us!
+  </p>
+</div>
+
       {hasLists && (
         <section style={{ maxWidth: 980, margin: "0 auto 28px", textAlign: "left" }}>
           <h2 style={{ margin: "0 0 10px" }}>My Wishlists</h2>
