@@ -1,7 +1,6 @@
 // src/app/account/signup/page.jsx
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { auth } from "@/lib/firebase";
@@ -72,9 +71,9 @@ export default function SignupPage() {
 
       <div style={{ marginTop: 12 }}>
         Already have an account?{" "}
-        <Link href="/account/login" className="cc-link" role="link" tabIndex={0}>
+        <a href="/account/login" className="cc-link" onClick={(e) => { e.preventDefault(); window.location.href = "/account/login"; }}>
           Log in
-        </Link>
+        </a>
       </div>
 
       <p style={{ marginTop: 8, fontSize: 12, color: "var(--cc-sub)" }}>
