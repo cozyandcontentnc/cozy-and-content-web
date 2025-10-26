@@ -27,7 +27,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), pw);
-      await ensureAuth(); // normalize local state if you use it elsewhere
+      await ensureAuth();
       router.replace("/");
     } catch (e) {
       setErr(e.message || "Login failed");
@@ -60,9 +60,14 @@ export default function LoginPage() {
         <button className="cc-btn" disabled={busy}>{busy ? "Logging in…" : "Log in"}</button>
       </form>
 
-      <p style={{ marginTop: 12 }}>
-        New here? <Link href="/account/signup" className="cc-link">Create an account</Link>
-      </p>
+      <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <p style={{ margin: 0 }}>
+          New here? <Link href="/account/signup" className="cc-link">Create an account</Link>
+        </p>
+        <p style={{ margin: 0 }}>
+          <Link href="/account/forgot" className="cc-link">Forgot password?</Link>
+        </p>
+      </div>
     </main>
   );
 }

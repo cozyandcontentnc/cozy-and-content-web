@@ -26,29 +26,27 @@ function Tab({ href, label, icon, active }) {
 
 export default function BottomBar() {
   const pathname = usePathname();
-  const active = (p) => (pathname === p || pathname.startsWith(p + "/"));
+  const active = (p) => pathname === p || pathname.startsWith(p + "/");
+
+  // Optional: hide on public share pages
+  if (pathname.startsWith("/s/")) return null;
 
   return (
     <nav
       className="cc-card"
       style={{
         position: "fixed",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 20,
-        borderTopLeftRadius: 12,
-        borderTopRightRadius: 12,
-        borderBottomLeftRadius: 0,
-        borderBottomRightRadius: 0,
-        display: "flex",
-        gap: 8,
+        left: 0, right: 0, bottom: 0, zIndex: 20,
+        borderTopLeftRadius: 12, borderTopRightRadius: 12,
+        borderBottomLeftRadius: 0, borderBottomRightRadius: 0,
+        display: "flex", gap: 8,
       }}
     >
       <Tab href="/" label="Home" icon="🏠" active={active("/")} />
       <Tab href="/scan" label="Scan" icon="📷" active={active("/scan")} />
-      <Tab href="/requests" label="Requests" icon="📨" active={active("/requests")} />
-      <Tab href="/settings" label="Settings" icon="⚙️" active={active("/settings")} />
+      <Tab href="/lists" label="Wishlists" icon="🗂️" active={active("/lists")} />
+      <Tab href="/order" label="Order" icon="✉️" active={active("/order")} />
+      <Tab href="/profile" label="Profile" icon="👤" active={active("/profile")} />
     </nav>
   );
 }
