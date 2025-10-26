@@ -17,7 +17,7 @@ export default function SignupPage() {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
-      if (u?.uid) router.replace("/");
+      if (u?.uid && !u.isAnonymous) router.replace("/");
     });
     return () => unsub();
   }, [router]);
@@ -70,8 +70,15 @@ export default function SignupPage() {
         <button className="cc-btn" disabled={busy}>{busy ? "Creating…" : "Create account"}</button>
       </form>
 
-      <p style={{ marginTop: 12 }}>
-        Already have an account? <Link href="/account/login" className="cc-link">Log in</Link>
+      <div style={{ marginTop: 12 }}>
+        Already have an account?{" "}
+        <Link href="/account/login" className="cc-link" role="link" tabIndex={0}>
+          Log in
+        </Link>
+      </div>
+
+      <p style={{ marginTop: 8, fontSize: 12, color: "var(--cc-sub)" }}>
+        Prefer to browse as a guest? No problem — you can always create an account later.
       </p>
     </main>
   );

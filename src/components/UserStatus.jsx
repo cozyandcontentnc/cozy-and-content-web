@@ -18,14 +18,11 @@ export default function UserStatus({ compact = false }) {
   async function handleSignOut() {
     try {
       await signOut(auth);
-      // The rest of your app will anonymously re-auth (via ensureAuth on pages),
-      // so this component will flip to the "not signed in" state automatically.
     } catch (e) {
       console.error(e);
     }
   }
 
-  // Compact mode trims copy for tight spaces (e.g., profile header)
   const containerStyle = compact
     ? { margin: "8px auto 16px", maxWidth: 900 }
     : { margin: "0 auto 20px", maxWidth: 900 };
@@ -34,9 +31,13 @@ export default function UserStatus({ compact = false }) {
     const name = user.displayName || user.email || "Account";
     return (
       <section className="cc-card" style={{ ...containerStyle, display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
-        <div style={{ fontWeight: 700 }}>Signed in as <span style={{ color: "var(--cc-accent)" }}>{name}</span></div>
+        <div style={{ fontWeight: 700 }}>
+          Signed in as <span style={{ color: "var(--cc-accent)" }}>{name}</span>
+        </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Link href="/account/profile" className="cc-btn-outline" style={{ textDecoration: "none" }}>Profile</Link>
+          <Link href="/account/profile" className="cc-btn-outline" role="button" tabIndex={0}>
+            Profile
+          </Link>
           <button className="cc-btn-outline" onClick={handleSignOut}>Sign out</button>
         </div>
       </section>
@@ -52,8 +53,12 @@ export default function UserStatus({ compact = false }) {
           You can browse and scan as a guest, but creating an account helps you keep your wishlists across devices.
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Link href="/account/signup" className="cc-btn" style={{ textDecoration: "none" }}>Create an account</Link>
-          <Link href="/account/login" className="cc-btn-outline" style={{ textDecoration: "none" }}>Log in</Link>
+          <Link href="/account/signup" className="cc-btn" role="button" tabIndex={0}>
+            Create an account
+          </Link>
+          <Link href="/account/login" className="cc-btn-outline" role="button" tabIndex={0}>
+            Log in
+          </Link>
         </div>
       </div>
     </section>
