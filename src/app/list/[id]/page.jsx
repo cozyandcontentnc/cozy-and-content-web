@@ -21,7 +21,7 @@ import { addToOrder } from "@/lib/order";
 import { libroSearchUrl } from "@/lib/libro";
 
 export default function ListPage() {
-  const { id } = useParams();      // wishlist id
+  const { id } = useParams();
   const router = useRouter();
 
   const [uid, setUid] = useState(null);
@@ -41,7 +41,6 @@ export default function ListPage() {
     return () => unsub();
   }, [router]);
 
-  // subscribe to list + items (keep doc ids!)
   useEffect(() => {
     if (!uid || !id) return;
 
@@ -59,7 +58,7 @@ export default function ListPage() {
       orderBy("addedAt", "desc")
     );
     const unsub = onSnapshot(qRef, (snap) => {
-      setItems(snap.docs.map((d) => ({ id: d.id, ...(d.data()) })));
+      setItems(snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })));
     });
     return () => unsub();
   }, [uid, id]);
@@ -154,7 +153,7 @@ export default function ListPage() {
       authors: it.authors || [],
       isbn: it.isbn || "",
       image: it.image || it.coverUrl || "",
-      fromShareId: null,        // in-app list page, not from a public share
+      fromShareId: null,
       ownerUid: uid,
       listId: id,
       itemId: it.id,
@@ -173,25 +172,26 @@ export default function ListPage() {
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>{list?.name || "Wishlist"}</h1>
         <a className="cc-btn-outline" href="/order">🧺 Order</a>
       </div>
-{list && (
-  <div className="cc-card wishlist-actions">
-    <button className="secondary" onClick={onRename}>Rename</button>
-    <button className="secondary" onClick={onTogglePublic}>
-      {list.isPublic ? "Make Private" : "Make Public"}
-    </button>
 
-    {list.isPublic && list.shareId && (
-      <ShareMenu
-        shareId={list.shareId}
-        shareUrl={shareUrl}
-        copy={copy}
-        shareList={shareList}
-      />
-    )}
+      {list && (
+        <div className="cc-card wishlist-actions">
+          <button className="secondary" onClick={onRename}>Rename</button>
+          <button className="secondary" onClick={onTogglePublic}>
+            {list.isPublic ? "Make Private" : "Make Public"}
+          </button>
 
-    <a className="secondary" href="/scan">+ Scan More</a>
-  </div>
-)}
+          {list.isPublic && list.shareId && (
+            <ShareMenu
+              shareId={list.shareId}
+              shareUrl={shareUrl}
+              copy={copy}
+              shareList={shareList}
+            />
+          )}
+
+          <a className="secondary" href="/scan">+ Scan More</a>
+        </div>
+      )}
 
       {status && <div className="cc-card" style={{ marginBottom: 12 }}>{status}</div>}
 
@@ -204,9 +204,9 @@ export default function ListPage() {
               key={it.id}
               className="cc-card"
               style={{
-                display:"flex",
-                gap:12,
-                alignItems:"center",
+                display: "flex",
+                gap: 12,
+                alignItems: "center",
                 opacity: it.purchased ? 0.6 : 1,
               }}
             >
@@ -224,41 +224,41 @@ export default function ListPage() {
                 <div style={{ fontWeight: 700 }}>
                   {it.title} {it.purchased ? "— Purchased" : ""}
                 </div>
-                <div style={{ opacity: .8 }}>
+                <div style={{ opacity: 0.8 }}>
                   {it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : "")}
                 </div>
-                <div style={{ opacity: .6, fontSize: 12 }}>
+                <div style={{ opacity: 0.6, fontSize: 12 }}>
                   ID: {it.id}{it.isbn ? ` • ISBN: ${it.isbn}` : ""}
                 </div>
 
-<div className="item-actions">
-  <a
-    className="cc-btn-outline"
-    href={libroSearchUrl(it.title, firstAuthor(it))}
-    target="_blank"
-    rel="noreferrer"
-  >
-    🎧 Find on Libro.fm
-  </a>
+                <div className="item-actions">
+                  <a
+                    className="cc-btn-outline"
+                    href={libroSearchUrl(it.title, firstAuthor(it))}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    🎧 Find on Libro.fm
+                  </a>
 
-  {list?.isPublic && list?.shareId && (
-    <button className="cc-btn-outline" onClick={() => shareBook(it)}>
-      Share this book
-    </button>
-  )}
+                  {list?.isPublic && list?.shareId && (
+                    <button className="cc-btn-outline" onClick={() => shareBook(it)}>
+                      Share this book
+                    </button>
+                  )}
 
-  <button className="cc-btn" onClick={() => onAddToOrder(it)}>
-    ➕ Add to Order
-  </button>
+                  <button className="cc-btn" onClick={() => onAddToOrder(it)}>
+                    ➕ Add to Order
+                  </button>
 
-  <button className="cc-btn-outline" onClick={() => togglePurchased(it)}>
-    {it.purchased ? "Mark as unpurchased" : "Mark as purchased"}
-  </button>
+                  <button className="cc-btn-outline" onClick={() => togglePurchased(it)}>
+                    {it.purchased ? "Mark as unpurchased" : "Mark as purchased"}
+                  </button>
 
-  <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>
-    🗑️ Delete
-  </button>
-</div>
+                  <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>
+                    🗑️ Delete
+                  </button>
+                </div>
               </div>
             </li>
           ))}
@@ -275,9 +275,7 @@ function ShareMenu({ shareId, shareUrl, copy, shareList }) {
 
   return (
     <div style={{ position: "relative" }}>
-      <button className="secondary" onClick={toggle}>
-        📤 Share
-      </button>
+      <button className="secondary" onClick={toggle}>📤 Share</button>
 
       {open && (
         <div
