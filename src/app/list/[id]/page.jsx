@@ -180,7 +180,6 @@ export default function ListPage() {
       {list.isPublic ? "Make Private" : "Make Public"}
     </button>
 
-    {/* Share Dropdown */}
     {list.isPublic && list.shareId && (
       <ShareMenu
         shareId={list.shareId}
@@ -189,8 +188,6 @@ export default function ListPage() {
         shareList={shareList}
       />
     )}
-
-    <div className="spacer" />
 
     <a className="secondary" href="/scan">+ Scan More</a>
   </div>

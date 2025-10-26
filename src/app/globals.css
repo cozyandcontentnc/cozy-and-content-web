@@ -61,9 +61,8 @@ select.cc-card{
 }
 
 /* ============================================================
-   Wishlist Buttons Layout (updated to override cc-btn)
+   Wishlist Buttons Layout (Aligned Row)
    ============================================================ */
-.cc-card.wishlist-actions,
 .wishlist-actions {
   display: flex;
   flex-wrap: wrap;
@@ -72,25 +71,23 @@ select.cc-card{
   margin-bottom: 16px;
 }
 
-.cc-card.wishlist-actions button,
-.cc-card.wishlist-actions a,
 .wishlist-actions button,
 .wishlist-actions a {
   background: var(--cc-accent);
   color: #fff;
   border: none;
-  padding: 6px 12px;
   border-radius: 8px;
-  font-size: 13px;
+  padding: 8px 12px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s ease;
+  flex: 1 1 120px;            /* ⬅️ every button grows/shrinks evenly */
+  text-align: center;
+  min-width: 100px;
+  max-width: 160px;
+  height: 38px;               /* ⬅️ consistent height */
   line-height: 1.2;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
 }
 
 .wishlist-actions button:hover,
@@ -98,7 +95,6 @@ select.cc-card{
   background: #b85f36;
 }
 
-/* Secondary and Danger variants */
 .wishlist-actions .secondary {
   background: #fff;
   color: var(--cc-text);
@@ -107,6 +103,7 @@ select.cc-card{
 .wishlist-actions .secondary:hover {
   background: #f4f0ea;
 }
+
 .wishlist-actions .danger {
   background: #b23a3a;
 }
@@ -114,16 +111,18 @@ select.cc-card{
   background: #922e2e;
 }
 
-/* Spacer pushes items apart */
 .wishlist-actions .spacer {
   flex: 1;
 }
 
-/* Optional divider */
-.wishlist-actions + hr {
-  border: none;
-  border-top: 1px solid var(--cc-border);
-  margin: 10px 0;
+@media (max-width: 480px) {
+  .wishlist-actions button,
+  .wishlist-actions a {
+    flex: 1 1 48%;
+    max-width: none;
+    font-size: 13px;
+    height: 36px;
+  }
 }
 
 /* ============================================================
