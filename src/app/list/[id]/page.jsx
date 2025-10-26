@@ -173,7 +173,6 @@ export default function ListPage() {
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>{list?.name || "Wishlist"}</h1>
         <a className="cc-btn-outline" href="/order">🧺 Order</a>
       </div>
-
 {list && (
   <div className="cc-card wishlist-actions">
     <button className="secondary" onClick={onRename}>Rename</button>
@@ -181,20 +180,19 @@ export default function ListPage() {
       {list.isPublic ? "Make Private" : "Make Public"}
     </button>
 
+    {/* Share Dropdown */}
     {list.isPublic && list.shareId && (
-      <>
-        <a className="secondary" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">
-          Public Link
-        </a>
-        <button className="secondary" onClick={() => copy(shareUrl)}>Copy Link</button>
-        <button className="secondary" onClick={shareList}>Share List</button>
-      </>
+      <ShareMenu
+        shareId={list.shareId}
+        shareUrl={shareUrl}
+        copy={copy}
+        shareList={shareList}
+      />
     )}
 
     <div className="spacer" />
 
     <a className="secondary" href="/scan">+ Scan More</a>
-    <a href="/order" className="cc-btn">✉️ Email My Order</a>
   </div>
 )}
 
@@ -270,5 +268,69 @@ export default function ListPage() {
         </ul>
       )}
     </main>
+  );
+}
+
+function ShareMenu({ shareId, shareUrl, copy, shareList }) {
+  const [open, setOpen] = useState(false);
+  const toggle = () => setOpen((o) => !o);
+  const close = () => setOpen(false);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="secondary" onClick={toggle}>
+        📤 Share
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "110%",
+            left: 0,
+            background: "var(--cc-card)",
+            border: "1px solid var(--cc-border)",
+            borderRadius: 8,
+            padding: 8,
+            boxShadow: "0 4px 14px rgba(0,0,0,0.1)",
+            zIndex: 10,
+            minWidth: 160,
+          }}
+        >
+          <a
+            className="cc-link"
+            href={`/s/${shareId}`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: "block", padding: "6px 8px" }}
+            onClick={close}
+          >
+            🔗 View Public Link
+          </a>
+          <button
+            className="cc-btn-outline"
+            onClick={() => { copy(shareUrl); close(); }}
+            style={{ width: "100%", textAlign: "left", marginTop: 4 }}
+          >
+            📋 Copy Link
+          </button>
+          <button
+            className="cc-btn-outline"
+            onClick={() => { shareList(); close(); }}
+            style={{ width: "100%", textAlign: "left", marginTop: 4 }}
+          >
+            💬 Share List
+          </button>
+          <a
+            href="/order"
+            className="cc-btn-outline"
+            style={{ display: "block", width: "100%", marginTop: 4, textAlign: "left" }}
+            onClick={close}
+          >
+            ✉️ Email My Order
+          </a>
+        </div>
+      )}
+    </div>
   );
 }
