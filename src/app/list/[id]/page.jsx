@@ -174,29 +174,31 @@ export default function ListPage() {
         <a className="cc-btn-outline" href="/order">🧺 Order</a>
       </div>
 
-      {list && (
-        <div className="cc-card" style={{ marginBottom: 12, display:"flex", gap:8, alignItems:"center", justifyContent:"space-between", flexWrap:"wrap" }}>
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            <button className="cc-btn-outline" onClick={onRename}>Rename</button>
-            <button className="cc-btn-outline" onClick={onTogglePublic}>
-              {list.isPublic ? "Make Private" : "Make Public"}
-            </button>
-            {list.isPublic && list.shareId && (
-              <>
-                <a className="cc-link" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">Public link</a>
-                <button className="cc-btn-outline" onClick={() => copy(shareUrl)}>
-                  Copy list link
-                </button>
-                <button className="cc-btn-outline" onClick={shareList}>Share this list</button>
-              </>
-            )}
-          </div>
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            <a className="cc-btn-outline" href="/scan">+ Scan more</a>
-            <a className="cc-btn" href="/order">✉️ Email my order</a>
-          </div>
-        </div>
+{list && (
+  <div className="cc-card" style={{ marginBottom: 16 }}>
+    <div className="wishlist-actions">
+      <button className="secondary" onClick={onRename}>Rename</button>
+      <button className="secondary" onClick={onTogglePublic}>
+        {list.isPublic ? "Make Private" : "Make Public"}
+      </button>
+
+      {list.isPublic && list.shareId && (
+        <>
+          <a className="secondary" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">
+            Public Link
+          </a>
+          <button className="secondary" onClick={() => copy(shareUrl)}>Copy Link</button>
+          <button className="secondary" onClick={shareList}>Share List</button>
+        </>
       )}
+
+      <div className="spacer" />
+
+      <a className="secondary" href="/scan">+ Scan More</a>
+      <a href="/order" className="cc-btn">✉️ Email My Order</a>
+    </div>
+  </div>
+)}
 
       {status && <div className="cc-card" style={{ marginBottom: 12 }}>{status}</div>}
 
