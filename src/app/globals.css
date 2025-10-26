@@ -61,8 +61,9 @@ select.cc-card{
 }
 
 /* ============================================================
-   Wishlist Buttons Layout
+   Wishlist Buttons Layout (updated to override cc-btn)
    ============================================================ */
+.cc-card.wishlist-actions,
 .wishlist-actions {
   display: flex;
   flex-wrap: wrap;
@@ -71,45 +72,54 @@ select.cc-card{
   margin-bottom: 16px;
 }
 
-.wishlist-actions button {
+.cc-card.wishlist-actions button,
+.cc-card.wishlist-actions a,
+.wishlist-actions button,
+.wishlist-actions a {
   background: var(--cc-accent);
   color: #fff;
   border: none;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s ease;
+  line-height: 1.2;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
 }
 
-.wishlist-actions button:hover {
+.wishlist-actions button:hover,
+.wishlist-actions a:hover {
   background: #b85f36;
 }
 
-.wishlist-actions button.secondary {
+/* Secondary and Danger variants */
+.wishlist-actions .secondary {
   background: #fff;
   color: var(--cc-text);
   border: 1px solid var(--cc-border);
 }
-
-.wishlist-actions button.secondary:hover {
+.wishlist-actions .secondary:hover {
   background: #f4f0ea;
 }
-
-.wishlist-actions button.danger {
+.wishlist-actions .danger {
   background: #b23a3a;
 }
-
-.wishlist-actions button.danger:hover {
+.wishlist-actions .danger:hover {
   background: #922e2e;
 }
 
+/* Spacer pushes items apart */
 .wishlist-actions .spacer {
   flex: 1;
 }
 
-/* Optional subtle divider line below the action row */
+/* Optional divider */
 .wishlist-actions + hr {
   border: none;
   border-top: 1px solid var(--cc-border);

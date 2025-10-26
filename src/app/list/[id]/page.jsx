@@ -175,7 +175,7 @@ export default function ListPage() {
       </div>
 
 {list && (
-  <div className="cc-card wishlist-actions" style={{ marginBottom: 16 }}>
+  <div className="cc-card wishlist-actions">
     <button className="secondary" onClick={onRename}>Rename</button>
     <button className="secondary" onClick={onTogglePublic}>
       {list.isPublic ? "Make Private" : "Make Public"}
