@@ -125,3 +125,43 @@ select.cc-card{
   border-top: 1px solid var(--cc-border);
   margin: 10px 0;
 }
+
+/* ============================================================
+   Book Item Buttons Layout
+   ============================================================ */
+.item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.item-actions button,
+.item-actions a {
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  line-height: 1.2;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.item-actions .cc-btn {
+  background: var(--cc-accent);
+  color: #fff;
+  border: none;
+}
+
+.item-actions .cc-btn-outline {
+  background: #fff;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-text);
+}
+
+.item-actions .cc-btn-outline:hover {
+  background: #f4f0ea;
+}

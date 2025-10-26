@@ -236,34 +236,34 @@ export default function ListPage() {
                   ID: {it.id}{it.isbn ? ` • ISBN: ${it.isbn}` : ""}
                 </div>
 
-                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  <a
-                    className="cc-btn-outline"
-                    href={libroSearchUrl(it.title, firstAuthor(it))}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    🎧 Find on Libro.fm
-                  </a>
+<div className="item-actions">
+  <a
+    className="cc-btn-outline"
+    href={libroSearchUrl(it.title, firstAuthor(it))}
+    target="_blank"
+    rel="noreferrer"
+  >
+    🎧 Find on Libro.fm
+  </a>
 
-                  {list?.isPublic && list?.shareId && (
-                    <button
-                      className="cc-btn-outline"
-                      onClick={() => shareBook(it)}
-                    >
-                      Share this book
-                    </button>
-                  )}
+  {list?.isPublic && list?.shareId && (
+    <button className="cc-btn-outline" onClick={() => shareBook(it)}>
+      Share this book
+    </button>
+  )}
 
-                  <button className="cc-btn" onClick={() => onAddToOrder(it)}>
-                    ➕ Add to Order
-                  </button>
+  <button className="cc-btn" onClick={() => onAddToOrder(it)}>
+    ➕ Add to Order
+  </button>
 
-                  <button className="cc-btn-outline" onClick={() => togglePurchased(it)}>
-                    {it.purchased ? "Mark as unpurchased" : "Mark as purchased"}
-                  </button>
-                  <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>🗑️ Delete</button>
-                </div>
+  <button className="cc-btn-outline" onClick={() => togglePurchased(it)}>
+    {it.purchased ? "Mark as unpurchased" : "Mark as purchased"}
+  </button>
+
+  <button className="cc-btn-outline" onClick={() => onDelete(it.id)}>
+    🗑️ Delete
+  </button>
+</div>
               </div>
             </li>
           ))}
