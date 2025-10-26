@@ -1,277 +1,363 @@
-// src/lib/wishlists.js
+// src/app/wishlists/[listId]/page.jsx
 "use client";
 
-import { db } from "@/lib/firebase";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useParams } from "next/navigation";
 import {
-  addDoc,
   collection,
   deleteDoc,
   doc,
-  getDoc,
   getDocs,
+  limit,
+  onSnapshot,
   orderBy,
   query,
   serverTimestamp,
-  setDoc,
-  updateDoc,
   writeBatch,
-  startAfter,
-  limit,
 } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
+import {
+  togglePublic,
+  removeItemById,
+  renameList,
+} from "@/lib/wishlists";
 
-/* ===================================================================
-   READ: public mapping for a shareId
-   shares/{shareId} => { ownerUid, listId, listName? }
-   =================================================================== */
-export async function getPublicMapping(shareId) {
-  const sref = doc(db, "shares", shareId);
-  const snap = await getDoc(sref);
-  if (!snap.exists()) return null;
-  const d = snap.data() || {};
-  return {
-    shareId: snap.id,
-    ownerUid: d.ownerUid,
-    listId: d.listId,
-    listName: d.listName || "Wishlist",
-  };
-}
+export default function WishlistPage() {
+  const router = useRouter();
+  const params = useParams();
+  const listId = Array.isArray(params?.listId) ? params.listId[0] : params?.listId;
 
-/* ===================================================================
-   UPDATE: rename a list
-   users/{uid}/wishlists/{listId}
-   =================================================================== */
-export async function renameList(uid, listId, newName) {
-  const ref = doc(db, "users", uid, "wishlists", listId);
-  await updateDoc(ref, { name: newName, updatedAt: serverTimestamp() });
-  // keep share doc in sync if it exists
-  const listSnap = await getDoc(ref);
-  const shareId = listSnap.data()?.shareId;
-  if (shareId) {
-    await setDoc(
-      doc(db, "shares", shareId),
-      { listName: newName, updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-  }
-}
+  const [uid, setUid] = useState(null);
+  const [list, setList] = useState(null);
+  const [items, setItems] = useState([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [loadingItems, setLoadingItems] = useState(true);
 
-/* ===================================================================
-   DELETE: remove one item from a list
-   users/{uid}/wishlists/{listId}/items/{itemId}
-   Also remove mirrored public item if list is public.
-   =================================================================== */
-export async function removeItemById(uid, listId, itemId) {
-  const listRef = doc(db, "users", uid, "wishlists", listId);
-  const listSnap = await getDoc(listRef);
-  const shareId = listSnap.data()?.shareId || null;
+  // Capture the signed-in user id
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((user) => {
+      setUid(user?.uid || null);
+      if (!user) {
+        // If not signed in, send to home (or your login)
+        router.push("/");
+      }
+    });
+    return () => unsub();
+  }, [router]);
 
-  const batch = writeBatch(db);
-  batch.delete(doc(db, "users", uid, "wishlists", listId, "items", itemId));
-  if (shareId) {
-    batch.delete(doc(db, "shares", shareId, "items", itemId));
-    batch.set(
-      doc(db, "shares", shareId),
-      { updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-  }
-  await batch.commit();
-}
-
-/* ===================================================================
-   TOGGLE PUBLIC:
-   - next === true  -> make public: ensure share doc + mirror items to shares/{shareId}/items
-   - next === false -> make private: delete shares subtree and unset flags
-   Returns shareId (when enabling).
-   =================================================================== */
-export async function togglePublic(uid, listId, next) {
-  const listRef = doc(db, "users", uid, "wishlists", listId);
-  const listSnap = await getDoc(listRef);
-  if (!listSnap.exists()) throw new Error("List not found.");
-
-  const list = listSnap.data() || {};
-  const currentShareId = list.shareId || null;
-
-  if (next) {
-    // ---- ENABLE PUBLIC ----
-    const shareId = currentShareId || doc(collection(db, "shares")).id;
-
-    // 1) upsert share doc
-    await setDoc(
-      doc(db, "shares", shareId),
-      {
-        ownerUid: uid,
-        listId,
-        listName: list.name || "Wishlist",
-        createdAt: currentShareId ? (list.createdAt || serverTimestamp()) : serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        v: 1,
+  // Subscribe to list doc
+  useEffect(() => {
+    if (!uid || !listId) return;
+    const ref = doc(db, "users", uid, "wishlists", listId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) {
+          setList(null);
+        } else {
+          setList({ id: snap.id, ...snap.data() });
+        }
+        setLoadingList(false);
       },
-      { merge: true }
+      () => setLoadingList(false)
     );
+    return () => unsub();
+  }, [uid, listId]);
 
-    // 2) mirror items into shares/{shareId}/items in batches
-    await mirrorListItemsToShare(uid, listId, shareId);
+  // Subscribe to items
+  useEffect(() => {
+    if (!uid || !listId) return;
+    const col = collection(db, "users", uid, "wishlists", listId, "items");
+    const q = query(col, orderBy("addedAt", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        setItems(arr);
+        setLoadingItems(false);
+      },
+      () => setLoadingItems(false)
+    );
+    return () => unsub();
+  }, [uid, listId]);
 
-    // 3) update list flags
-    await updateDoc(listRef, {
-      isPublic: true,
-      shareId,
-      updatedAt: serverTimestamp(),
-    });
+  const isPublic = !!list?.isPublic;
+  const listName = list?.name ?? "Wishlist";
 
-    return shareId;
-  } else {
-    // ---- DISABLE PUBLIC ----
-    const shareId = currentShareId;
-    if (shareId) {
-      await deleteShareTree(shareId);
+  // Handlers
+  const handleAddBook = () => {
+    // open your "add manual" UI; swap as needed
+    const title = prompt("Add a book by title (quick add):");
+    if (!title || !uid) return;
+    const ref = doc(collection(db, "users", uid, "wishlists", listId, "items"));
+    writeBatch(db)
+      .set(ref, {
+        title,
+        author: "",
+        authors: [],
+        isbn: "",
+        image: "",
+        coverUrl: "",
+        thumbnail: "",
+        addedAt: serverTimestamp(),
+      })
+      .set(doc(db, "users", uid, "wishlists", listId), { updatedAt: serverTimestamp() }, { merge: true })
+      .commit();
+  };
+
+  const handleScan = () => router.push("/scan");
+
+  const handleRename = async () => {
+    if (!uid) return;
+    const next = prompt("Rename list:", listName);
+    if (!next || next === listName) return;
+    try {
+      await renameList(uid, listId, next);
+    } catch (e) {
+      alert(e?.message || "Rename failed.");
     }
-    await updateDoc(listRef, {
-      isPublic: false,
-      shareId: null,
-      updatedAt: serverTimestamp(),
-    });
-    return null;
-  }
-}
+  };
 
-/* ===================================================================
-   INTERNAL: mirror all items to shares/{shareId}/items
-   - paginated to avoid huge writes
-   - batches of up to ~400 ops per commit (under 500 limit)
-   Fields mirrored: id, title, author/authors, isbn, image, coverUrl, thumbnail, addedAt
-   =================================================================== */
-async function mirrorListItemsToShare(uid, listId, shareId) {
-  const srcCol = collection(db, "users", uid, "wishlists", listId, "items");
-  let last = null;
+  const handleShare = async () => {
+    if (!uid) return;
+    try {
+      const next = !isPublic;
+      await togglePublic(uid, listId, next);
+      // Optional: copy current URL (keeps things simple & non-speculative)
+      if (next) {
+        await navigator.clipboard.writeText(window.location.href);
+      }
+    } catch (e) {
+      alert(e?.message || "Share toggle failed.");
+    }
+  };
 
-  while (true) {
-    const pageQ = last
-      ? query(srcCol, orderBy("addedAt", "desc"), startAfter(last), limit(400))
-      : query(srcCol, orderBy("addedAt", "desc"), limit(400));
+  const handleExport = () => {
+    const rows = [
+      ["Title", "Author(s)", "ISBN", "Added At"],
+      ...items.map((it) => [
+        safeCSV(it.title),
+        safeCSV(it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : "")),
+        safeCSV(it.isbn || ""),
+        safeCSV(tsToLocal(it.addedAt)),
+      ]),
+    ];
+    const csv = rows.map((r) => r.map(csvCell).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(listName || "wishlist").replace(/\s+/g, "-").toLowerCase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
-    const snap = await getDocs(pageQ);
-    if (snap.empty) break;
+  const handleDeleteList = async () => {
+    if (!uid) return;
+    if (!confirm("Delete this list and all its items? This cannot be undone.")) return;
 
-    const batch = writeBatch(db);
-    snap.forEach((d) => {
-      const it = d.data() || {};
-      const authorsArr = Array.isArray(it.authors)
-        ? it.authors
-        : it.author
-        ? [it.author]
-        : [];
-      const pubDoc = doc(db, "shares", shareId, "items", d.id);
-      batch.set(
-        pubDoc,
-        {
-          title: it.title || "",
-          author: it.author || (authorsArr.length ? authorsArr.join(", ") : ""),
-          authors: authorsArr,
-          isbn: it.isbn || "",
-          image: it.image || it.coverUrl || it.thumbnail || "",
-          coverUrl: it.coverUrl || it.image || it.thumbnail || "",
-          thumbnail: it.thumbnail || it.coverUrl || it.image || "",
-          addedAt: it.addedAt || serverTimestamp(),
-        },
-        { merge: true }
+    // Delete in batches to stay under limits
+    try {
+      const itemsCol = collection(db, "users", uid, "wishlists", listId, "items");
+      while (true) {
+        const page = await getDocs(query(itemsCol, limit(400)));
+        if (page.empty) break;
+        const batch = writeBatch(db);
+        page.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+        if (page.size < 400) break;
+      }
+      await deleteDoc(doc(db, "users", uid, "wishlists", listId));
+      router.push("/wishlists"); // go back to lists index
+    } catch (e) {
+      alert(e?.message || "Delete failed.");
+    }
+  };
+
+  const handleRemoveItem = async (itemId) => {
+    if (!uid) return;
+    try {
+      await removeItemById(uid, listId, itemId);
+    } catch (e) {
+      alert(e?.message || "Remove failed.");
+    }
+  };
+
+  const handleSort = () => {
+    // Simple demo: toggle client-side sort as an example
+    // Replace with your own modal/sort UI if you like.
+    const mode = prompt(
+      "Sort by:\n1 = Newest first\n2 = Title A→Z\n3 = Author A→Z",
+      "1"
+    );
+    if (!mode) return;
+    if (mode === "2") {
+      setItems((prev) =>
+        [...prev].sort((a, b) => (a.title || "").localeCompare(b.title || ""))
       );
-    });
-
-    // bump parent share updatedAt
-    batch.set(
-      doc(db, "shares", shareId),
-      { updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-
-    await batch.commit();
-    last = snap.docs[snap.docs.length - 1];
-    if (snap.size < 400) break;
-  }
-}
-
-/* ===================================================================
-   INTERNAL: delete shares/{shareId}/items/* then the share doc
-   =================================================================== */
-async function deleteShareTree(shareId) {
-  const itemsCol = collection(db, "shares", shareId, "items");
-  while (true) {
-    const page = await getDocs(query(itemsCol, limit(400)));
-    if (page.empty) break;
-    const batch = writeBatch(db);
-    page.forEach((d) => batch.delete(d.ref));
-    await batch.commit();
-    if (page.size < 400) break;
-  }
-  await deleteDoc(doc(db, "shares", shareId));
-}
-
-/* ===================================================================
-   (Optional) create a list – included for completeness
-   =================================================================== */
-export async function createList(uid, name) {
-  const ref = await addDoc(collection(db, "users", uid, "wishlists"), {
-    name: name || "Wishlist",
-    isPublic: false,
-    shareId: null,
-    itemCount: 0,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  return ref.id;
-}
-
-/* ===================================================================
-   REPAIR: ensure shares/{shareId} + shares/{shareId}/items for a single list
-   - Reuses existing shareId if present; otherwise generates one.
-   =================================================================== */
-export async function ensureShareForList(uid, listId) {
-  const listRef = doc(db, "users", uid, "wishlists", listId);
-  const listSnap = await getDoc(listRef);
-  if (!listSnap.exists()) throw new Error("List not found");
-  const list = listSnap.data() || {};
-  if (!list.isPublic && !list.shareId) throw new Error("List is not public");
-
-  const shareId = list.shareId || doc(collection(db, "shares")).id;
-
-  // Upsert parent share doc
-  await setDoc(
-    doc(db, "shares", shareId),
-    {
-      ownerUid: uid,
-      listId,
-      listName: list.name || "Wishlist",
-      createdAt: list.createdAt || serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      v: 1,
-    },
-    { merge: true }
-  );
-
-  // Mirror items (with coverUrl/thumbnail)
-  await mirrorListItemsToShare(uid, listId, shareId);
-
-  // Ensure list flags
-  await updateDoc(listRef, { isPublic: true, shareId, updatedAt: serverTimestamp() });
-
-  return shareId;
-}
-
-/* ===================================================================
-   BACKFILL: ensure shares for all currently public lists (run once)
-   =================================================================== */
-export async function backfillAllPublicShares(uid) {
-  const listsCol = collection(db, "users", uid, "wishlists");
-  const snap = await getDocs(listsCol);
-  const results = [];
-  for (const d of snap.docs) {
-    const data = d.data() || {};
-    if (data.isPublic) {
-      const shareId = await ensureShareForList(uid, d.id);
-      results.push({ listId: d.id, shareId });
+    } else if (mode === "3") {
+      setItems((prev) =>
+        [...prev].sort((a, b) =>
+          (a.author || a.authors?.[0] || "").localeCompare(b.author || b.authors?.[0] || "")
+        )
+      );
+    } else {
+      // Default: newest first (already via query order), do nothing
     }
+  };
+
+  const header = useMemo(() => {
+    if (loadingList) return "Loading…";
+    if (!list) return "Wishlist";
+    return listName;
+  }, [loadingList, list, listName]);
+
+  return (
+    <div className="cc-card" style={{ maxWidth: 1000, margin: "16px auto" }}>
+      {/* Action Row */}
+      <div className="wishlist-actions">
+        <button onClick={handleAddBook}>Add Book</button>
+        <button className="secondary" onClick={handleScan}>Scan Barcode</button>
+        <button className="secondary" onClick={handleRename}>Rename</button>
+        <button className="secondary" onClick={handleShare}>
+          {isPublic ? "Make Private" : "Make Public"}
+        </button>
+
+        <div className="spacer" />
+
+        <button className="secondary" onClick={handleSort}>Sort</button>
+        <button onClick={handleExport}>Export</button>
+        <button className="danger" onClick={handleDeleteList}>Delete</button>
+      </div>
+
+      <h1 style={{ margin: "0 0 8px 0", fontSize: 20 }}>{header}</h1>
+      {isPublic ? (
+        <p style={{ marginTop: 0, color: "var(--cc-sub)" }}>This list is public.</p>
+      ) : (
+        <p style={{ marginTop: 0, color: "var(--cc-sub)" }}>This list is private.</p>
+      )}
+
+      {/* Items */}
+      <div style={{ marginTop: 12 }}>
+        {loadingItems ? (
+          <p>Loading books…</p>
+        ) : items.length === 0 ? (
+          <EmptyState onAdd={handleAddBook} onScan={handleScan} />
+        ) : (
+          <ItemGrid items={items} onRemove={handleRemoveItem} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ItemGrid({ items, onRemove }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+        gap: 12,
+      }}
+    >
+      {items.map((it) => (
+        <div key={it.id} className="cc-card" style={{ padding: 10 }}>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ width: 60, flex: "0 0 auto" }}>
+              <Cover src={it.thumbnail || it.coverUrl || it.image} alt={it.title} />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.2 }}>
+                {it.title || "Untitled"}
+              </div>
+              <div style={{ color: "var(--cc-sub)", fontSize: 12, marginTop: 4 }}>
+                {it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : "")}
+              </div>
+              {it.isbn ? (
+                <div style={{ color: "var(--cc-sub)", fontSize: 12, marginTop: 2 }}>
+                  ISBN: {it.isbn}
+                </div>
+              ) : null}
+              <div style={{ marginTop: 8 }}>
+                <button className="cc-btn-outline" onClick={() => onRemove(it.id)}>
+                  Remove
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Cover({ src, alt }) {
+  const fallback =
+    "data:image/svg+xml;utf8," +
+    encodeURIComponent(
+      `<svg xmlns='http://www.w3.org/2000/svg' width='60' height='90'><rect width='100%' height='100%' fill='%23f0eae2'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='10' fill='%237a6e64'>No Cover</text></svg>`
+    );
+  return (
+    <img
+      src={src || fallback}
+      alt={alt || "Cover"}
+      style={{
+        display: "block",
+        width: "60px",
+        height: "90px",
+        objectFit: "cover",
+        borderRadius: 6,
+        border: "1px solid var(--cc-border)",
+        background: "#f8f5f0",
+      }}
+      onError={(e) => {
+        if (e.currentTarget.src !== fallback) e.currentTarget.src = fallback;
+      }}
+    />
+  );
+}
+
+function EmptyState({ onAdd, onScan }) {
+  return (
+    <div
+      className="cc-card"
+      style={{ textAlign: "center", padding: 24, borderStyle: "dashed" }}
+    >
+      <p style={{ marginTop: 0, marginBottom: 8 }}>
+        No books here yet. Let’s add your first one!
+      </p>
+      <div className="wishlist-actions" style={{ justifyContent: "center", marginBottom: 0 }}>
+        <button onClick={onAdd}>Add Book</button>
+        <button className="secondary" onClick={onScan}>Scan Barcode</button>
+      </div>
+    </div>
+  );
+}
+
+// Helpers
+function safeCSV(s) {
+  if (s == null) return "";
+  return String(s);
+}
+function csvCell(v) {
+  const s = String(v ?? "");
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+function tsToLocal(ts) {
+  // Handles Firestore Timestamp-like objects or ISO strings
+  try {
+    if (!ts) return "";
+    // Firestore serverTimestamp resolves after write; during live view it might be { seconds, nanoseconds }
+    if (typeof ts?.toDate === "function") return ts.toDate().toLocaleString();
+    if (ts?.seconds) return new Date(ts.seconds * 1000).toLocaleString();
+    const d = new Date(ts);
+    if (!isNaN(d.getTime())) return d.toLocaleString();
+    return "";
+  } catch {
+    return "";
   }
-  return results;
 }
