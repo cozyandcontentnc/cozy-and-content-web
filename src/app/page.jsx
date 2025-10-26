@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ensureAuth, db } from "@/lib/firebase";
 import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { libroSearchUrl } from "@/lib/libro";
+import UserStatus from "@/components/UserStatus";
 
 const LOGO_W = 220;
 const LOGO_H = 160;
@@ -18,7 +19,7 @@ export default function Page() {
   useEffect(() => {
     let active = true;
     (async () => {
-      const user = await ensureAuth();
+      const user = await ensureAuth(); // allows anonymous
       if (active) setUid(user?.uid || null);
     })();
     return () => { active = false; };
@@ -59,6 +60,9 @@ export default function Page() {
           style={{ display: "block", margin: "0 auto" }}
         />
       </div>
+
+      {/* <<< New user status banner >>> */}
+      <UserStatus />
 
       <h1 style={{ fontSize: "2rem", fontWeight: 800, margin: "0 0 8px", color: "#2a2a2a" }}>
         Welcome to Cozy & Content!

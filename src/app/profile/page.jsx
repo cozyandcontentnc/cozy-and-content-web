@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { auth, db, ensureAuth } from "@/lib/firebase";
 import {
   onAuthStateChanged,
@@ -13,7 +14,7 @@ import {
   signOut,
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
-import Link from "next/link";
+import UserStatus from "@/components/UserStatus";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -21,8 +22,6 @@ export default function ProfilePage() {
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-
-  // admin gating
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Change Password fields
@@ -31,11 +30,12 @@ export default function ProfilePage() {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
-      if (!u) {
-        router.replace("/account/login");
-        return;
-      }
-      setUser(u);
+      setUser(u || null);
+
+      // If no user at all (initial load before ensureAuth elsewhere), don't redirect.
+      // We want this page to be viewable by guests and show the CTA banner.
+      if (!u) return;
+
       setDisplayName(u.displayName || "");
 
       // Check admins/{uid} — if it exists, show admin link
@@ -47,10 +47,10 @@ export default function ProfilePage() {
       }
     });
     return () => unsub();
-  }, [router]);
+  }, []);
 
   async function onSave() {
-    if (!auth.currentUser) return;
+    if (!auth.currentUser || auth.currentUser.isAnonymous) return;
     setBusy(true);
     setMsg("");
     try {
@@ -83,7 +83,7 @@ export default function ProfilePage() {
   }
 
   async function onChangePassword() {
-    if (!auth.currentUser) return;
+    if (!auth.currentUser || auth.currentUser.isAnonymous) return;
     if (!newPw || newPw.length < 6) {
       setMsg("New password must be at least 6 characters.");
       setTimeout(() => setMsg(""), 1500);
@@ -113,15 +113,20 @@ export default function ProfilePage() {
   }
 
   async function onSignOut() {
-    await signOut(auth);
-    router.replace("/account/login");
+    try {
+      await signOut(auth);
+    } finally {
+      router.replace("/");
+    }
   }
+
+  const isRealUser = !!user && !user.isAnonymous;
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 640, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <h1 style={{ margin: 0 }}>Profile</h1>
-        {isAdmin && (
+        {isRealUser && isAdmin && (
           <span
             title="You have admin access"
             style={{
@@ -134,7 +139,11 @@ export default function ProfilePage() {
         )}
       </div>
 
-      {user && (
+      {/* Always show status banner (compact) so guests see the CTA and signed-in users see their name */}
+      <UserStatus compact />
+
+      {/* Signed-in (non-anonymous) users get full profile controls */}
+      {isRealUser && (
         <div className="cc-card" style={{ display: "grid", gap: 16 }}>
           {/* Email */}
           <div>
@@ -207,11 +216,27 @@ export default function ProfilePage() {
               }}
             >
               <Link href="/admin" className="cc-btn-outline">🔧 Admin Console</Link>
-              {/* add more admin tools here if you want */}
             </div>
           )}
 
           {msg && <div style={{ fontSize: 13 }}>{msg}</div>}
+        </div>
+      )}
+
+      {/* Anonymous/guest helper card (optional, below the banner) */}
+      {!isRealUser && (
+        <div className="cc-card" style={{ marginTop: 12 }}>
+          <div style={{ color: "var(--cc-sub)" }}>
+            Create a free account to set your display name, manage your password, and keep your wishlists across devices.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <Link href="/account/signup" className="cc-btn" style={{ textDecoration: "none" }}>
+              Create an account
+            </Link>
+            <Link href="/account/login" className="cc-btn-outline" style={{ textDecoration: "none" }}>
+              Log in
+            </Link>
+          </div>
         </div>
       )}
     </main>
