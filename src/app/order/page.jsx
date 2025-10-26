@@ -6,19 +6,21 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   getOrder,
-  saveOrder,
   removeFromOrder,
   clearOrder,
   buildMailto,
 } from "@/lib/order";
+import { auth } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
 
-const LS_KEY_PROFILE = "cc_order_profile_v1"; // store {name,email}
+const LS_KEY_PROFILE = "cc_order_profile_v1";
 
 export default function OrderPage() {
   const [items, setItems] = useState([]);
   const [profile, setProfile] = useState({ name: "", email: "" });
   const [status, setStatus] = useState("");
 
+  // 1) Load cart and any saved profile
   useEffect(() => {
     setItems(getOrder());
     try {
@@ -27,13 +29,30 @@ export default function OrderPage() {
     } catch {}
   }, []);
 
+  // 2) If user is signed in, prefill missing name/email once
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (!u) return;
+      setProfile((prev) => {
+        const next = {
+          name: prev.name || u.displayName || "A Cozy Shopper",
+          email: prev.email || u.email || "",
+        };
+        // persist if we actually filled anything
+        if (next.name !== prev.name || next.email !== prev.email) {
+          try { localStorage.setItem(LS_KEY_PROFILE, JSON.stringify(next)); } catch {}
+        }
+        return next;
+      });
+    });
+    return () => unsub();
+  }, []);
+
   const count = items.length;
 
   function updateProfile(next) {
     setProfile(next);
-    try {
-      localStorage.setItem(LS_KEY_PROFILE, JSON.stringify(next));
-    } catch {}
+    try { localStorage.setItem(LS_KEY_PROFILE, JSON.stringify(next)); } catch {}
   }
 
   function onRemove(idx) {
@@ -56,8 +75,8 @@ export default function OrderPage() {
       return;
     }
     const href = buildMailto({
-      name: profile.name,
-      email: profile.email,
+      name: profile.name || "",
+      email: profile.email || "",
       items,
     });
     window.location.href = href;
@@ -90,7 +109,7 @@ export default function OrderPage() {
 
       {status && <div className="cc-card" style={{ marginBottom: 12 }}>{status}</div>}
 
-      {/* Profile */}
+      {/* Profile (auto-filled from account if available, but editable) */}
       <form onSubmit={onEmail}>
         <div className="cc-card" style={{ display: "grid", gap: 10, marginBottom: 12 }}>
           <div>
@@ -157,11 +176,6 @@ export default function OrderPage() {
                     </div>
                     {author && <div style={{ opacity: 0.8 }}>{author}</div>}
                     {b.isbn && <div style={{ fontFamily: "monospace", fontSize: 12 }}>ISBN: {b.isbn}</div>}
-                    {(b.fromShareId || b.listId) && (
-                      <div style={{ opacity: 0.65, fontSize: 12 }}>
-                        {b.fromShareId ? `Share: ${b.fromShareId}` : `List: ${b.listId}`}
-                      </div>
-                    )}
                   </div>
 
                   <button
