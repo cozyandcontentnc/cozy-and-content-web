@@ -178,20 +178,43 @@ select.cc-card{
 }
 
 /* ============================================
-   Share Button Alignment Fix
+   Share Button Full Alignment Fix
    ============================================ */
+
+/* Make the Share button's wrapper identical in size */
 .wishlist-actions > div {
-  width: 130px;          /* same width as other buttons */
-  height: 38px;          /* same height as other buttons */
+  width: 130px;            /* exact match */
+  height: 38px;            /* exact match */
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+/* Force the Share button itself to match button sizing */
 .wishlist-actions > div > button.secondary {
   width: 100%;
   height: 100%;
-  display: block;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  border: 1px solid var(--cc-border);
+  background: #fff;
+  color: var(--cc-text);
   text-align: center;
+  white-space: nowrap;
+}
+
+/* Hover consistency */
+.wishlist-actions > div > button.secondary:hover {
+  background: #f4f0ea;
+}
+
+/* Center the dropdown beneath the button */
+.wishlist-actions > div > div {
+  left: 50% !important;
+  transform: translateX(-50%);
 }
