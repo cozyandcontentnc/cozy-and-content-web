@@ -1,5 +1,6 @@
 // src/app/account/signup/page.jsx
 "use client";
+export const dynamic = "force-dynamic";
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -16,6 +17,7 @@ export default function SignupPage() {
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
+      // Only bounce away if the user is a real (non-anonymous) account
       if (u?.uid && !u.isAnonymous) router.replace("/");
     });
     return () => unsub();
@@ -71,7 +73,11 @@ export default function SignupPage() {
 
       <div style={{ marginTop: 12 }}>
         Already have an account?{" "}
-        <a href="/account/login" className="cc-link" onClick={(e) => { e.preventDefault(); window.location.href = "/account/login"; }}>
+        <a
+          href="/account/login"
+          className="cc-link"
+          onClick={(e) => { e.preventDefault(); router.push("/account/login"); }}
+        >
           Log in
         </a>
       </div>

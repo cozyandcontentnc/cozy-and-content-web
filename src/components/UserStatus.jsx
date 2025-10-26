@@ -16,17 +16,14 @@ export default function UserStatus({ compact = false }) {
     return () => unsub();
   }, []);
 
+  const nav = (href) => router.push(href);
+
   async function handleSignOut() {
     try {
       await signOut(auth);
     } catch (e) {
       console.error(e);
     }
-  }
-
-  function hardNav(href) {
-    // Use hard navigation to avoid any client-side interception/overlays
-    window.location.href = href;
   }
 
   const containerStyle = compact
@@ -44,7 +41,8 @@ export default function UserStatus({ compact = false }) {
           Signed in as <span style={{ color: "var(--cc-accent)" }}>{name}</span>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="cc-btn-outline" onClick={() => hardNav("/account/profile")}>Profile</button>
+          {/* Your profile route is /profile */}
+          <button className="cc-btn-outline" onClick={() => nav("/profile")}>Profile</button>
           <button className="cc-btn-outline" onClick={handleSignOut}>Sign out</button>
         </div>
       </section>
@@ -60,8 +58,8 @@ export default function UserStatus({ compact = false }) {
           You can browse and scan as a guest, but creating an account helps you keep your wishlists across devices.
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="cc-btn" onClick={() => hardNav("/account/signup")}>Create an account</button>
-          <button className="cc-btn-outline" onClick={() => hardNav("/account/login")}>Log in</button>
+          <button className="cc-btn" onClick={() => nav("/account/signup")}>Create an account</button>
+          <button className="cc-btn-outline" onClick={() => nav("/account/login")}>Log in</button>
         </div>
       </div>
     </section>
