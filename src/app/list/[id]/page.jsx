@@ -275,7 +275,8 @@ function ShareMenu({ shareId, shareUrl, copy, shareList }) {
 
   return (
     <div style={{ position: "relative" }}>
-      <button className="secondary" onClick={toggle}>📤 Share</button>
+      <button className="cc-btn-outline secondary share-btn" onClick={toggle}>
+📤 Share</button>
 
       {open && (
         <div
