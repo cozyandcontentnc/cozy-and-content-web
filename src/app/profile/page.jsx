@@ -31,9 +31,6 @@ export default function ProfilePage() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u || null);
-
-      // If no user at all (initial load before ensureAuth elsewhere), don't redirect.
-      // We want this page to be viewable by guests and show the CTA banner.
       if (!u) return;
 
       setDisplayName(u.displayName || "");
@@ -139,10 +136,10 @@ export default function ProfilePage() {
         )}
       </div>
 
-      {/* Always show status banner (compact) so guests see the CTA and signed-in users see their name */}
+      {/* Always show status banner (compact) */}
       <UserStatus compact />
 
-      {/* Signed-in (non-anonymous) users get full profile controls */}
+      {/* Only show account tools if signed in (non-anonymous) */}
       {isRealUser && (
         <div className="cc-card" style={{ display: "grid", gap: 16 }}>
           {/* Email */}
@@ -171,7 +168,7 @@ export default function ProfilePage() {
 
           <hr style={{ border: 0, borderTop: "1px solid #eee" }} />
 
-          {/* Forgot password (send reset) */}
+          {/* Forgot password */}
           <div style={{ display: "grid", gap: 8 }}>
             <div style={{ fontWeight: 700 }}>Forgot password</div>
             <div style={{ fontSize: 13, color: "#666" }}>
@@ -207,7 +204,7 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* ---- ADMIN ONLY LINKS ---- */}
+          {/* Admin-only tools */}
           {isAdmin && (
             <div
               style={{
@@ -220,23 +217,6 @@ export default function ProfilePage() {
           )}
 
           {msg && <div style={{ fontSize: 13 }}>{msg}</div>}
-        </div>
-      )}
-
-      {/* Anonymous/guest helper card (optional, below the banner) */}
-      {!isRealUser && (
-        <div className="cc-card" style={{ marginTop: 12 }}>
-          <div style={{ color: "var(--cc-sub)" }}>
-            Create a free account to set your display name, manage your password, and keep your wishlists across devices.
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <Link href="/account/signup" className="cc-btn" style={{ textDecoration: "none" }}>
-              Create an account
-            </Link>
-            <Link href="/account/login" className="cc-btn-outline" style={{ textDecoration: "none" }}>
-              Log in
-            </Link>
-          </div>
         </div>
       )}
     </main>
