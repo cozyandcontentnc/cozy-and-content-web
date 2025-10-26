@@ -175,28 +175,26 @@ export default function ListPage() {
       </div>
 
 {list && (
-  <div className="cc-card" style={{ marginBottom: 16 }}>
-    <div className="wishlist-actions">
-      <button className="secondary" onClick={onRename}>Rename</button>
-      <button className="secondary" onClick={onTogglePublic}>
-        {list.isPublic ? "Make Private" : "Make Public"}
-      </button>
+  <div className="cc-card wishlist-actions" style={{ marginBottom: 16 }}>
+    <button className="secondary" onClick={onRename}>Rename</button>
+    <button className="secondary" onClick={onTogglePublic}>
+      {list.isPublic ? "Make Private" : "Make Public"}
+    </button>
 
-      {list.isPublic && list.shareId && (
-        <>
-          <a className="secondary" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">
-            Public Link
-          </a>
-          <button className="secondary" onClick={() => copy(shareUrl)}>Copy Link</button>
-          <button className="secondary" onClick={shareList}>Share List</button>
-        </>
-      )}
+    {list.isPublic && list.shareId && (
+      <>
+        <a className="secondary" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">
+          Public Link
+        </a>
+        <button className="secondary" onClick={() => copy(shareUrl)}>Copy Link</button>
+        <button className="secondary" onClick={shareList}>Share List</button>
+      </>
+    )}
 
-      <div className="spacer" />
+    <div className="spacer" />
 
-      <a className="secondary" href="/scan">+ Scan More</a>
-      <a href="/order" className="cc-btn">✉️ Email My Order</a>
-    </div>
+    <a className="secondary" href="/scan">+ Scan More</a>
+    <a href="/order" className="cc-btn">✉️ Email My Order</a>
   </div>
 )}
 
