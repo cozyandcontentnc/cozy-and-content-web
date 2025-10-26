@@ -1,63 +1,68 @@
 /* src/app/globals.css */
-:root{
-  --cc-bg:#FAF7F2;      /* parchment */
-  --cc-card:#FFFFFF;
-  --cc-text:#2B2B2B;    /* charcoal */
-  --cc-sub:#6B6358;     /* warm gray */
-  --cc-border:#D6CBBE;  /* linen edge */
-  --cc-accent:#C96C3E;  /* terracotta */
-  --cc-accent-2:#E6B79D;
+:root {
+  --cc-bg: #FAF7F2;      /* parchment */
+  --cc-card: #FFFFFF;
+  --cc-text: #2B2B2B;    /* charcoal */
+  --cc-sub: #6B6358;     /* warm gray */
+  --cc-border: #D6CBBE;  /* linen edge */
+  --cc-accent: #C96C3E;  /* terracotta */
+  --cc-accent-2: #E6B79D;
 }
-*{ box-sizing:border-box }
-html,body{ margin:0; padding:0; }
-body{
-  background:var(--cc-bg);
-  color:var(--cc-text);
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--cc-bg);
+  color: var(--cc-text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
 }
 
-a{ color:inherit; text-decoration:none; }
-button{ font:inherit; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; }
 
-.cc-card{
-  background:var(--cc-card);
-  border:1px solid var(--cc-border);
-  border-radius:12px;
-  padding:12px;
+/* ============================================================
+   Core Cards & Buttons
+   ============================================================ */
+.cc-card {
+  background: var(--cc-card);
+  border: 1px solid var(--cc-border);
+  border-radius: 12px;
+  padding: 12px;
 }
 
-.cc-btn{
-  background:var(--cc-accent);
-  color:#fff;
-  border:none;
-  border-radius:12px;
-  padding:12px 14px;
-  font-weight:700;
-  cursor:pointer;
-  transition:background 0.2s ease;
+.cc-btn {
+  background: var(--cc-accent);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
 }
-.cc-btn:hover{ background:#b85f36; }
-.cc-btn[disabled]{ opacity:.6; cursor:not-allowed; }
+.cc-btn:hover { background: #b85f36; }
+.cc-btn[disabled] { opacity: .6; cursor: not-allowed; }
 
-.cc-btn-outline{
-  background:#fff;
-  border:1px solid var(--cc-border);
-  border-radius:12px;
-  padding:12px 14px;
-  cursor:pointer;
-  transition:background 0.2s ease;
+.cc-btn-outline {
+  background: #fff;
+  border: 1px solid var(--cc-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: background 0.2s ease;
 }
-.cc-btn-outline:hover{ background:#f8f5f0; }
+.cc-btn-outline:hover { background: #f8f5f0; }
 
-.cc-link{
-  color:var(--cc-accent);
-  text-decoration:underline;
+.cc-link {
+  color: var(--cc-accent);
+  text-decoration: underline;
 }
 
 input.cc-card,
 textarea.cc-card,
-select.cc-card{
-  padding:10px 12px;
+select.cc-card {
+  padding: 10px 12px;
 }
 
 /* ============================================================
@@ -67,8 +72,8 @@ select.cc-card{
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
   justify-content: flex-start;
+  gap: 8px;
   margin-bottom: 16px;
 }
 
@@ -84,8 +89,8 @@ select.cc-card{
   cursor: pointer;
   transition: background 0.2s ease;
   text-align: center;
-  width: 130px;          /* ✅ consistent width */
-  height: 38px;          /* ✅ consistent height */
+  width: 130px;      /* consistent width */
+  height: 38px;      /* consistent height */
   white-space: nowrap;
 }
 
@@ -99,30 +104,25 @@ select.cc-card{
   color: var(--cc-text);
   border: 1px solid var(--cc-border);
 }
-
-.wishlist-actions .secondary:hover {
-  background: #f4f0ea;
-}
+.wishlist-actions .secondary:hover { background: #f4f0ea; }
 
 .wishlist-actions .danger {
   background: #b23a3a;
 }
-.wishlist-actions .danger:hover {
-  background: #922e2e;
-}
+.wishlist-actions .danger:hover { background: #922e2e; }
 
-.wishlist-actions .spacer {
-  flex: 1;
-}
+.wishlist-actions .spacer { flex: 1; }
 
-/* Make sure the dropdown Share menu doesn't break alignment */
 .wishlist-actions > div {
   position: relative;
-  width: 130px;   /* match button width */
-  height: 38px;   /* match button height */
+  width: 130px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-/* Responsive adjustment for very narrow screens */
+/* Responsive adjustment for small screens */
 @media (max-width: 480px) {
   .wishlist-actions button,
   .wishlist-actions a,
@@ -167,22 +167,14 @@ select.cc-card{
   border: 1px solid var(--cc-border);
   color: var(--cc-text);
 }
-
-.item-actions .cc-btn-outline:hover {
-  background: #f4f0ea;
-}
-
-/* Small fix for dropdown inside .wishlist-actions */
-.wishlist-actions > div {
-  position: relative;
-}
+.item-actions .cc-btn-outline:hover { background: #f4f0ea; }
 
 /* ============================================================
-   Final Share Button Size Fix
+   Share Button Alignment & Dropdown
    ============================================================ */
 .wishlist-actions .share-btn {
-  width: 130px;            /* exactly match other buttons */
-  height: 38px;
+  width: 130px !important;
+  height: 38px !important;
   border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
@@ -194,23 +186,16 @@ select.cc-card{
   border: 1px solid var(--cc-border);
   cursor: pointer;
   transition: background 0.2s ease;
+  text-align: center;
+  white-space: nowrap;
+  box-sizing: border-box;
+  padding: 8px 12px !important;
 }
 
-.wishlist-actions .share-btn:hover {
-  background: #f4f0ea;
-}
+.wishlist-actions .share-btn:hover { background: #f4f0ea; }
 
-.wishlist-actions > div {
-  width: 130px;
-  height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-
-/* Center dropdown under the Share button */
+/* Ensure the dropdown centers perfectly below the button */
 .wishlist-actions > div > div {
-  left: 50%;
-  transform: translateX(-50%);
+  left: 50% !important;
+  transform: translateX(-50%) !important;
 }
