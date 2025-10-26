@@ -121,6 +121,48 @@ export default function ListPage() {
     return "";
   }
 
+  // --- Friendly share helpers ---
+  function composeShareFields({ kind, item, listName, userName, url, listUrl }) {
+    const sender = userName || "a Cozy & Content friend";
+    const by = item?.author ? ` by ${item.author}` : "";
+    const titleLine =
+      kind === "book"
+        ? `A book rec from ${sender} 📚`
+        : `A wishlist from ${sender} 📝`;
+
+    let body =
+      kind === "book"
+        ? [
+            `Hi there!`,
+            ``,
+            `${sender} would really love this book:`,
+            `${item?.title || "Book"}${by}`,
+            ``,
+            `You can check it out here: ${url}`,
+            ``,
+            `If you end up grabbing it, let them know so they can mark it as purchased.`,
+            listUrl ? `` : ``,
+            listUrl ? `See their full wishlist: ${listUrl}` : ``,
+            ``,
+            `— Sent from Cozy & Content Wishlists`,
+          ]
+        : [
+            `Hi there!`,
+            ``,
+            `${sender} shared a wishlist with you:`,
+            `${listName || "Wishlist"}`,
+            ``,
+            `View it here: ${url}`,
+            ``,
+            `If you pick anything up from this list, please give them a heads-up so they can mark it as purchased.`,
+            ``,
+            `— Sent from Cozy & Content Wishlists`,
+          ];
+
+    body = body.filter(Boolean).join("\n");
+    return { title: titleLine, text: body };
+  }
+
   function shareList() {
     if (!list?.shareId) {
       setStatus("Make the list public to share a link.");
@@ -128,11 +170,13 @@ export default function ListPage() {
       return;
     }
     const url = `${location.origin}/s/${list.shareId}`;
-    shareText(
-      `Wishlist from ${list.name || "Cozy & Content"}`,
-      `${userName} would love these books!`,
-      url
-    );
+    const { title, text } = composeShareFields({
+      kind: "list",
+      listName: list.name,
+      userName,
+      url,
+    });
+    shareText(title, text, url);
   }
 
   function shareBook(item) {
@@ -142,9 +186,18 @@ export default function ListPage() {
       return;
     }
     const url = `${location.origin}/s/${list.shareId}?item=${item.id}`;
-    const by = item.author ? ` by ${item.author}` : "";
-    shareText(item.title || "Book", `${(item.title || "Book")}${by} — from ${userName}`, url);
+    const listUrl = `${location.origin}/s/${list.shareId}`;
+    const { title, text } = composeShareFields({
+      kind: "book",
+      item,
+      listName: list.name,
+      userName,
+      url,
+      listUrl,
+    });
+    shareText(title, text, url);
   }
+  // --- End share helpers ---
 
   async function onAddToOrder(it) {
     const payload = {
@@ -167,7 +220,7 @@ export default function ListPage() {
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
-      {/* Centered title bar using grid */}
+      {/* Centered title bar */}
       <div
         style={{
           display: "grid",
@@ -190,10 +243,10 @@ export default function ListPage() {
         </a>
       </div>
 
-      {/* Sharing explainer */}
+      {/* Sharing explanation */}
       {list && (
         <div className="cc-card" style={{ marginBottom: 12, lineHeight: 1.4 }}>
-          <strong>Sharing tip:</strong> To share this wishlist or individual items, make the wishlist{" "}
+          <strong>Sharing tip:</strong> To share this wishlist or individual books, make the wishlist{" "}
           <em>Public</em> first. Use the <strong>{list.isPublic ? "Make Private" : "Make Public"}</strong> button below.
           <div style={{ marginTop: 6, fontSize: 13, color: "var(--cc-sub)" }}>
             Status: {list.isPublic ? "🔗 Public — anyone with the link can view" : "🔒 Private — only you can view"}
