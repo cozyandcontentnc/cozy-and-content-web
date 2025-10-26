@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { auth, ensureAuth } from "@/lib/firebase";
+import { auth, db, ensureAuth } from "@/lib/firebase";
 import {
   onAuthStateChanged,
   updateProfile,
@@ -12,6 +12,8 @@ import {
   updatePassword,
   signOut,
 } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import Link from "next/link";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -20,18 +22,29 @@ export default function ProfilePage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // admin gating
+  const [isAdmin, setIsAdmin] = useState(false);
+
   // Change Password fields
   const [newPw, setNewPw] = useState("");
   const [newPw2, setNewPw2] = useState("");
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
       if (!u) {
         router.replace("/account/login");
         return;
       }
       setUser(u);
       setDisplayName(u.displayName || "");
+
+      // Check admins/{uid} — if it exists, show admin link
+      try {
+        const snap = await getDoc(doc(db, "admins", u.uid));
+        setIsAdmin(!!snap.exists());
+      } catch {
+        setIsAdmin(false);
+      }
     });
     return () => unsub();
   }, [router]);
@@ -106,7 +119,20 @@ export default function ProfilePage() {
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 640, margin: "0 auto" }}>
-      <h1 style={{ marginBottom: 12 }}>Profile</h1>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <h1 style={{ margin: 0 }}>Profile</h1>
+        {isAdmin && (
+          <span
+            title="You have admin access"
+            style={{
+              background: "#365c4a", color: "#fff", fontSize: 12, padding: "2px 8px",
+              borderRadius: 999, fontWeight: 700
+            }}
+          >
+            Admin
+          </span>
+        )}
+      </div>
 
       {user && (
         <div className="cc-card" style={{ display: "grid", gap: 16 }}>
@@ -171,6 +197,19 @@ export default function ProfilePage() {
               If you see “requires recent login,” please sign out and sign back in first.
             </div>
           </div>
+
+          {/* ---- ADMIN ONLY LINKS ---- */}
+          {isAdmin && (
+            <div
+              style={{
+                marginTop: 4, paddingTop: 8, borderTop: "1px dashed #e9e3d9",
+                display: "flex", gap: 8, flexWrap: "wrap"
+              }}
+            >
+              <Link href="/admin" className="cc-btn-outline">🔧 Admin Console</Link>
+              {/* add more admin tools here if you want */}
+            </div>
+          )}
 
           {msg && <div style={{ fontSize: 13 }}>{msg}</div>}
         </div>
