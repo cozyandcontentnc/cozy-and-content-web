@@ -140,7 +140,7 @@ export async function togglePublic(uid, listId, next) {
    INTERNAL: mirror all items to shares/{shareId}/items
    - paginated to avoid huge writes
    - batches of up to ~400 ops per commit (under 500 limit)
-   Fields mirrored: id, title, author/authors, isbn, image/coverUrl, addedAt
+   Fields mirrored: id, title, author/authors, isbn, image, coverUrl, thumbnail, addedAt
    =================================================================== */
 async function mirrorListItemsToShare(uid, listId, shareId) {
   const srcCol = collection(db, "users", uid, "wishlists", listId, "items");
@@ -157,15 +157,22 @@ async function mirrorListItemsToShare(uid, listId, shareId) {
     const batch = writeBatch(db);
     snap.forEach((d) => {
       const it = d.data() || {};
+      const authorsArr = Array.isArray(it.authors)
+        ? it.authors
+        : it.author
+        ? [it.author]
+        : [];
       const pubDoc = doc(db, "shares", shareId, "items", d.id);
       batch.set(
         pubDoc,
         {
           title: it.title || "",
-          author: it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : ""),
-          authors: it.authors || null,
+          author: it.author || (authorsArr.length ? authorsArr.join(", ") : ""),
+          authors: authorsArr,
           isbn: it.isbn || "",
-          image: it.image || it.coverUrl || "",
+          image: it.image || it.coverUrl || it.thumbnail || "",
+          coverUrl: it.coverUrl || it.image || it.thumbnail || "",
+          thumbnail: it.thumbnail || it.coverUrl || it.image || "",
           addedAt: it.addedAt || serverTimestamp(),
         },
         { merge: true }
@@ -243,7 +250,7 @@ export async function ensureShareForList(uid, listId) {
     { merge: true }
   );
 
-  // Mirror items
+  // Mirror items (with coverUrl/thumbnail)
   await mirrorListItemsToShare(uid, listId, shareId);
 
   // Ensure list flags

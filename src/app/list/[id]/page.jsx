@@ -1,3 +1,4 @@
+// src/app/list/[id]/page.jsx
 "use client";
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,9 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { removeItemById, togglePublic, renameList } from "@/lib/wishlists";
-import { libroSearchUrl } from "@/lib/libro"; // only one helper now
+import { shareText } from "@/lib/share";
+import { addToOrder } from "@/lib/order";
+import { libroSearchUrl } from "@/lib/libro";
 
 export default function ListPage() {
   const { id } = useParams();      // wishlist id
@@ -32,7 +35,7 @@ export default function ListPage() {
       if (!u?.uid) router.replace("/account/login");
       else {
         setUid(u.uid);
-        setUserName(u.displayName || "A Cozy Shopper"); // Set displayName or default to a fallback name
+        setUserName(u.displayName || "A Cozy Shopper");
       }
     });
     return () => unsub();
@@ -79,6 +82,8 @@ export default function ListPage() {
       setList((l) => ({ ...l, isPublic: next, shareId: next ? shareId : null }));
     } catch (e) {
       console.error(e);
+      setStatus("Failed to toggle public.");
+      setTimeout(() => setStatus(""), 1500);
     }
   }
 
@@ -93,7 +98,6 @@ export default function ListPage() {
     }
   }
 
-  // Copy function to copy text to clipboard
   function copy(text) {
     navigator.clipboard?.writeText(text).then(
       () => setStatus("Link copied"),
@@ -112,48 +116,62 @@ export default function ListPage() {
     }
   }
 
-  // Function to share the entire list with custom message
-  function shareList() {
-    if (navigator.share) {
-      navigator.share({
-        title: `Check out this wishlist from ${list.name}`,
-        text: `${userName} would love these books! Check stock and order via the Cozy and Content app!`,
-        url: `${location.origin}/s/${list.shareId}`,
-      }).then(() => {
-        setStatus("List shared successfully!");
-      }).catch(err => {
-        console.error("Error sharing:", err);
-        setStatus("Failed to share the list.");
-      });
-    } else {
-      setStatus("Your browser does not support sharing.");
-    }
+  function firstAuthor(it) {
+    if (it.author) return it.author;
+    if (Array.isArray(it.authors) && it.authors.length) return it.authors[0];
+    return "";
   }
 
-  // Function to share a single book with a custom message
-  function shareBook(item) {
-    if (navigator.share) {
-      navigator.share({
-        title: item.title,
-        text: `${item.title} by ${item.author} — ${userName} would love this book! Check stock and order via the Cozy and Content app!`,
-        url: `${location.origin}/s/${list.shareId}?item=${item.id}`,
-      }).then(() => {
-        setStatus("Book shared successfully!");
-      }).catch(err => {
-        console.error("Error sharing:", err);
-        setStatus("Failed to share the book.");
-      });
-    } else {
-      setStatus("Your browser does not support sharing.");
+  function shareList() {
+    if (!list?.shareId) {
+      setStatus("Make the list public to share a link.");
+      setTimeout(() => setStatus(""), 1500);
+      return;
     }
+    const url = `${location.origin}/s/${list.shareId}`;
+    shareText(
+      `Wishlist from ${list.name || "Cozy & Content"}`,
+      `${userName} would love these books!`,
+      url
+    );
   }
+
+  function shareBook(item) {
+    if (!list?.shareId) {
+      setStatus("Make the list public to share a link.");
+      setTimeout(() => setStatus(""), 1500);
+      return;
+    }
+    const url = `${location.origin}/s/${list.shareId}?item=${item.id}`;
+    const by = item.author ? ` by ${item.author}` : "";
+    shareText(item.title || "Book", `${(item.title || "Book")}${by} — from ${userName}`, url);
+  }
+
+  async function onAddToOrder(it) {
+    const payload = {
+      title: it.title || "",
+      author: it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : ""),
+      authors: it.authors || [],
+      isbn: it.isbn || "",
+      image: it.image || it.coverUrl || "",
+      fromShareId: null,        // in-app list page, not from a public share
+      ownerUid: uid,
+      listId: id,
+      itemId: it.id,
+    };
+    const res = await addToOrder(payload);
+    setStatus(res?.wroteBookRequests ? "Added to order (synced)" : "Added to order");
+    setTimeout(() => setStatus(""), 1200);
+  }
+
+  const shareUrl = list?.shareId ? `${location.origin}/s/${list.shareId}` : "";
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <button className="cc-btn-outline" onClick={() => history.back()}>← Back</button>
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>{list?.name || "Wishlist"}</h1>
-        <a className="cc-btn-outline" href="/">Home</a>
+        <a className="cc-btn-outline" href="/order">🧺 Order</a>
       </div>
 
       {list && (
@@ -166,17 +184,17 @@ export default function ListPage() {
             {list.isPublic && list.shareId && (
               <>
                 <a className="cc-link" href={`/s/${list.shareId}`} target="_blank" rel="noreferrer">Public link</a>
-                <button
-                  className="cc-btn-outline"
-                  onClick={() => copy(`${location.origin}/s/${list.shareId}`)}
-                >
+                <button className="cc-btn-outline" onClick={() => copy(shareUrl)}>
                   Copy list link
                 </button>
                 <button className="cc-btn-outline" onClick={shareList}>Share this list</button>
               </>
             )}
           </div>
-          <a className="cc-btn-outline" href="/scan">+ Scan more</a>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <a className="cc-btn-outline" href="/scan">+ Scan more</a>
+            <a className="cc-btn" href="/order">✉️ Email my order</a>
+          </div>
         </div>
       )}
 
@@ -197,23 +215,37 @@ export default function ListPage() {
                 opacity: it.purchased ? 0.6 : 1,
               }}
             >
-              {it.image && <img src={it.image} width={60} height={90} alt={it.title} />}
+              {(it.coverUrl || it.image) && (
+                <img
+                  src={it.coverUrl || it.image}
+                  width={60}
+                  height={90}
+                  alt={it.title || "Book cover"}
+                  style={{ borderRadius: 6, objectFit: "cover" }}
+                  onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+                />
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700 }}>
                   {it.title} {it.purchased ? "— Purchased" : ""}
                 </div>
-                <div style={{ opacity: .8 }}>{it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : "")}</div>
+                <div style={{ opacity: .8 }}>
+                  {it.author || (Array.isArray(it.authors) ? it.authors.join(", ") : "")}
+                </div>
                 <div style={{ opacity: .6, fontSize: 12 }}>
                   ID: {it.id}{it.isbn ? ` • ISBN: ${it.isbn}` : ""}
                 </div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  {/* Deep link to Libro.fm (by title/author) */}
-                  <a className="cc-btn-outline" href={libroSearchUrl(it.title, it.author)} target="_blank" rel="noreferrer">
+                  <a
+                    className="cc-btn-outline"
+                    href={libroSearchUrl(it.title, firstAuthor(it))}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     🎧 Find on Libro.fm
                   </a>
 
-                  {/* Share single book (only if list is public & has shareId) */}
                   {list?.isPublic && list?.shareId && (
                     <button
                       className="cc-btn-outline"
@@ -223,7 +255,10 @@ export default function ListPage() {
                     </button>
                   )}
 
-                  {/* Owner controls */}
+                  <button className="cc-btn" onClick={() => onAddToOrder(it)}>
+                    ➕ Add to Order
+                  </button>
+
                   <button className="cc-btn-outline" onClick={() => togglePurchased(it)}>
                     {it.purchased ? "Mark as unpurchased" : "Mark as purchased"}
                   </button>

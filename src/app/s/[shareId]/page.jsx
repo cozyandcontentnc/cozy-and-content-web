@@ -1,10 +1,10 @@
-// src/app/s/[shareId]/page.jsx
 "use client";
 export const dynamic = "force-dynamic";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { db, ensureAuth } from "@/lib/firebase";
+import Link from "next/link";
+import { db } from "@/lib/firebase";
 import {
   collection,
   doc,
@@ -12,103 +12,50 @@ import {
   getDocs,
   orderBy,
   query,
-  serverTimestamp,
-  addDoc,
 } from "firebase/firestore";
 
-/**
- * Helper: write to BOTH destinations used in your app:
- *   A) users/{viewerUid}/requests       (status: "new")
- *   B) users/{viewerUid}/bookRequests   (status: "requested")  <-- /requests page reads this
- * Returns { wroteRequests, wroteBookRequests, error? }
- */
-async function addToRequestsBoth(viewerUid, payload) {
-  let wroteRequests = false;
-  let wroteBookRequests = false;
-  let lastError = null;
-
-  // A) generic "requests"
-  try {
-    const inbox = collection(db, "users", viewerUid, "requests");
-    await addDoc(inbox, {
-      ...payload,
-      createdAt: serverTimestamp(),
-      source: "share",
-      status: "new",
-      type: payload?.type || "book",
-    });
-    wroteRequests = true;
-  } catch (e) {
-    console.warn("[share] write to users/requests failed:", e?.code || e);
-    lastError = e;
-  }
-
-  // B) bookRequests (the collection your Requests page subscribes to)
-  try {
-    const bookReqs = collection(db, "users", viewerUid, "bookRequests");
-    await addDoc(bookReqs, {
-      title: payload.title || "",
-      author:
-        payload.author ||
-        (Array.isArray(payload.authors) ? payload.authors.join(", ") : ""),
-      isbn: payload.isbn || "",
-      image: payload.image || payload.coverUrl || "",
-      fromShareId: payload.fromShareId || null,
-      ownerUid: payload.ownerUid || null,
-      listId: payload.listId || null,
-      itemId: payload.itemId || null,
-      status: "requested",
-      type: payload?.type || "book",
-      createdAt: serverTimestamp(),
-    });
-    wroteBookRequests = true;
-  } catch (e) {
-    console.warn("[share] write to users/bookRequests failed:", e?.code || e);
-    lastError = e;
-  }
-
-  return { wroteRequests, wroteBookRequests, error: lastError || undefined };
-}
+const SHOP_EMAIL = "cozyandcontentbooks@gmail.com";
 
 export default function PublicSharePage() {
-  const { shareId } = useParams();                   // /s/:shareId
+  const { shareId } = useParams(); // /s/:shareId
   const search = useSearchParams();
-  const focusItem = search.get("item");              // optional ?item=abc
+  const focusItem = search.get("item"); // optional ?item=abc (preselect + outline)
   const router = useRouter();
 
-  const [viewerUid, setViewerUid] = useState(null);
-  const [mapping, setMapping] = useState(null);      // { ownerUid, listId, listName? }
-  const [items, setItems] = useState(null);
+  const [mapping, setMapping] = useState(null); // { ownerUid, listId, listName? }
+  const [items, setItems] = useState(null);     // null = loading, [] = empty
   const [status, setStatus] = useState("Loading…");
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+
+  const [selected, setSelected] = useState([]);
+  const [copied, setCopied] = useState(false);
+  const listRef = useRef(null);
 
   const focusedIndex = useMemo(() => {
     if (!items || !focusItem) return -1;
     return items.findIndex((b) => b.id === focusItem);
   }, [items, focusItem]);
 
+  // Resolve mapping: shares/{shareId} -> { ownerUid, listId, listName? }
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        // 1) Ensure we have a session (anonymous is fine)
-        const user = await ensureAuth({ allowAnonymous: true });
-        if (!user?.uid) {
-          if (alive) setStatus("Could not open a session to save your request.");
-          return;
-        }
-        if (alive) setViewerUid(user.uid);
-
-        // 2) Resolve mapping document: shares/{shareId}
         const sref = doc(db, "shares", shareId);
         const ssnap = await getDoc(sref);
         if (!ssnap.exists()) {
-          if (alive) setStatus("This share link is no longer available.");
+          if (alive) {
+            setStatus("This shared wishlist link is no longer available.");
+            setItems([]); // prevent spinner
+          }
           return;
         }
         const map = { id: ssnap.id, ...(ssnap.data() || {}) };
         if (alive) setMapping(map);
 
-        // 3) Try denormalized public items first: shares/{shareId}/items
+        // Load denormalized public items first: shares/{shareId}/items
         let loaded = [];
         try {
           const pubQ = query(
@@ -118,10 +65,10 @@ export default function PublicSharePage() {
           const pubSnap = await getDocs(pubQ);
           loaded = pubSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
         } catch {
-          // ignore; we’ll fall back below
+          // ignore; we'll try the owner path
         }
 
-        // 4) Fallback to owner path if public items aren't present
+        // Fallback to owner path if nothing denormalized
         if (!loaded.length && map.ownerUid && map.listId) {
           try {
             const ownerQ = query(
@@ -130,48 +77,30 @@ export default function PublicSharePage() {
             );
             const ownerSnap = await getDocs(ownerQ); // may fail if rules block it
             loaded = ownerSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-          } catch (e) {
-            // Cross-user read blocked — still usable for single-item add by id.
+          } catch {
+            // cross-user read blocked
           }
         }
 
         if (alive) {
           setItems(loaded);
-          setStatus("");
-        }
-
-        // 5) If this is a single-book link, auto-add & redirect
-        if (focusItem && alive) {
-          const found =
-            loaded.find((b) => b.id === focusItem) ||
-            // minimal stub if we couldn’t read details
-            { id: focusItem, title: "", author: "", isbn: "", image: "" };
-
-          const result = await addToRequestsBoth(user.uid, {
-            type: "book",
-            fromShareId: shareId,
-            ownerUid: map.ownerUid,
-            listId: map.listId,
-            itemId: found.id,
-            title: found.title || "",
-            author:
-              found.author ||
-              (Array.isArray(found.authors) ? found.authors.join(", ") : ""),
-            isbn: found.isbn || "",
-            image: found.image || found.coverUrl || "",
-          });
-
-          if (!result.wroteBookRequests) {
-            console.warn("[share] Added locally / to users/requests, but bookRequests write failed.");
-            setStatus("Saved, but not showing in Requests list. Check your console for details.");
-            setTimeout(() => setStatus(""), 2000);
+          setStatus(loaded.length ? "" : "No books on this wishlist yet.");
+          // Preselect ?item=...
+          if (loaded.length && focusItem && loaded.some((b) => b.id === focusItem)) {
+            setSelected([focusItem]);
+            // scroll a touch after paint
+            requestAnimationFrame(() => {
+              const el = document.getElementById(`book-row-${focusItem}`);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
           }
-
-          router.replace("/requests");
         }
       } catch (e) {
         console.error(e);
-        if (alive) setStatus("We couldn’t open that share. Please try again.");
+        if (alive) {
+          setStatus("We couldn’t open that share. Please try again.");
+          setItems([]);
+        }
       }
     })();
     return () => {
@@ -179,80 +108,279 @@ export default function PublicSharePage() {
     };
   }, [shareId, focusItem, router]);
 
-  if (!items) {
-    return (
-      <main style={{ padding: 20, fontFamily: "system-ui" }}>
-        {status || "Loading…"}
-      </main>
-    );
+  function toggleOne(id, checked) {
+    setSelected((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)));
   }
 
-  // Full list view (no ?item=...)
+  const allChecked = items?.length && selected.length === items.length;
+  function toggleAll(checked) {
+    if (!items?.length) return;
+    setSelected(checked ? items.map((b) => b.id) : []);
+  }
+
+  const selectedRows = useMemo(
+    () => (items || []).filter((b) => selected.includes(b.id)),
+    [items, selected]
+  );
+
+  function coverFor(b) {
+    return b.image || b.coverUrl || b.thumbnail || "";
+  }
+
+  function buildMailto({ name, email, listName, items }) {
+    const subject = encodeURIComponent(
+      `Wishlist Order Request${listName ? ` — ${listName}` : ""}`
+    );
+    const lines = [];
+    lines.push(`Name: ${name || ""}`);
+    lines.push(`Email: ${email || ""}`);
+    lines.push("");
+    lines.push("I'd like to order the following titles:");
+    lines.push("");
+
+    items.forEach((b, idx) => {
+      const author =
+        b.author || (Array.isArray(b.authors) ? b.authors.join(", ") : "");
+      const title = b.title || "Untitled";
+      const isbn = b.isbn ? ` (ISBN: ${b.isbn})` : "";
+      lines.push(`${idx + 1}. ${title}${author ? " — " + author : ""}${isbn}`);
+    });
+
+    lines.push("");
+    lines.push("Notes:");
+
+    const body = encodeURIComponent(lines.join("\n"));
+    return `mailto:${SHOP_EMAIL}?subject=${subject}&body=${body}`;
+  }
+
+  function onEmailSelected(e) {
+    e.preventDefault();
+    if (!selectedRows.length) {
+      alert("Select at least one book to email.");
+      return;
+    }
+    const href = buildMailto({
+      name,
+      email,
+      listName: mapping?.listName,
+      items: selectedRows,
+    });
+    window.location.href = href;
+  }
+
+  async function onCopyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Fallback: select + prompt (very old browsers)
+      const ok = window.prompt("Copy this link:", window.location.href);
+      if (typeof ok === "string") setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }
+
   return (
-    <main style={{ maxWidth: 760, margin: "0 auto", padding: 12, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>
-        {mapping?.listName || "Shared Wishlist"}
-      </h1>
-      {status && <div className="cc-card" style={{ marginBottom: 12 }}>{status}</div>}
+    <main style={{ maxWidth: 860, margin: "0 auto", padding: 16, fontFamily: "system-ui" }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <Link href="/" className="cc-btn-outline">← Home</Link>
+        <h1 style={{ margin: 0, flex: "1 1 auto" }}>
+          {mapping?.listName ? `Requests — ${mapping.listName}` : "Requests"}
+        </h1>
+        <button
+          type="button"
+          onClick={onCopyLink}
+          className="cc-btn"
+          style={{
+            padding: "8px 12px",
+            backgroundColor: "#fff",
+            color: "#365c4a",
+            border: "2px solid #365c4a",
+            borderRadius: 8,
+            cursor: "pointer",
+            fontWeight: 700,
+          }}
+        >
+          🔗 Copy link
+        </button>
+      </div>
 
-      <div style={{ display: "grid", gap: 8 }}>
-        {items.map((b, i) => (
-          <div
-            key={b.id}
-            className="cc-card"
-            style={{
-              display: "grid",
-              gap: 6,
-              outline: i === focusedIndex ? "2px solid var(--cc-accent)" : "none",
-            }}
-          >
-            <div style={{ fontWeight: 700 }}>{b.title || "Untitled"}</div>
-            {(b.author || b.authors) && (
-              <div style={{ opacity: 0.8 }}>
-                {b.author || (Array.isArray(b.authors) ? b.authors.join(", ") : "")}
-              </div>
-            )}
-            {b.isbn && (
-              <div style={{ fontFamily: "monospace", fontSize: 12 }}>
-                ISBN: {b.isbn}
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-              <button
-                className="cc-btn"
-                onClick={async () => {
-                  if (!viewerUid) return;
-                  const res = await addToRequestsBoth(viewerUid, {
-                    type: "book",
-                    fromShareId: shareId,
-                    ownerUid: mapping?.ownerUid,
-                    listId: mapping?.listId,
-                    itemId: b.id,
-                    title: b.title || "",
-                    author:
-                      b.author ||
-                      (Array.isArray(b.authors) ? b.authors.join(", ") : ""),
-                    isbn: b.isbn || "",
-                    image: b.image || b.coverUrl || "",
-                  });
+      {copied && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            left: "50%",
+            transform: "translateX(-50%)",
+            bottom: 20,
+            background: "#2d6a4f",
+            color: "#fff",
+            padding: "8px 12px",
+            borderRadius: 999,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+            zIndex: 50,
+            fontWeight: 700,
+          }}
+        >
+          Link copied!
+        </div>
+      )}
 
-                  if (res.error) {
-                    setStatus("Could not save to Requests. See console.");
-                    console.error(res.error);
-                  } else if (!res.wroteBookRequests) {
-                    setStatus("Saved, but not showing in Requests. See console.");
-                  } else {
-                    setStatus("Added to your Requests.");
-                  }
-                  setTimeout(() => setStatus(""), 1500);
+      {status && (
+        <div className="cc-card" style={{ marginBottom: 12 }}>
+          {status}
+        </div>
+      )}
+
+      {/* Contact block (optional but handy for your inbox) */}
+      <form onSubmit={onEmailSelected}>
+        <div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
+          <div>
+            <label htmlFor="name" style={{ display: "block", marginBottom: 6 }}>Your Name</label>
+            <input
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your name"
+              style={{ width: "100%", padding: 8 }}
+            />
+          </div>
+          <div>
+            <label htmlFor="email" style={{ display: "block", marginBottom: 6 }}>Your Email</label>
+            <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              style={{ width: "100%", padding: 8 }}
+            />
+          </div>
+        </div>
+
+        {/* Bulk controls */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={!!allChecked}
+              onChange={(e) => toggleAll(e.target.checked)}
+            />
+            <span>Select all</span>
+          </label>
+          <span style={{ color: "#666" }}>
+            {selected.length} selected {items?.length ? `of ${items.length}` : ""}
+          </span>
+        </div>
+
+        {/* Items */}
+        <div ref={listRef} style={{ display: "grid", gap: 10 }}>
+          {(items || []).map((b, i) => {
+            const id = b.id;
+            const checked = selected.includes(id);
+            const author =
+              b.author || (Array.isArray(b.authors) ? b.authors.join(", ") : "");
+            const outlined = i === focusedIndex;
+            const cover = coverFor(b);
+
+            return (
+              <div
+                key={id}
+                id={`book-row-${id}`}
+                className="cc-card"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "auto 64px 1fr",
+                  gap: 10,
+                  alignItems: "center",
+                  outline: outlined ? "2px solid var(--cc-accent, #365c4a)" : "none",
                 }}
               >
-                + Add to my order
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => toggleOne(id, e.target.checked)}
+                  aria-label={`Select ${b.title || "Untitled"}`}
+                />
+
+                {/* Jacket thumbnail */}
+                {cover ? (
+                  <img
+                    src={cover}
+                    alt={b.title || "Book cover"}
+                    width={64}
+                    height={96}
+                    loading="lazy"
+                    style={{
+                      width: 64,
+                      height: 96,
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      background: "#f4f1ea",
+                      border: "1px solid #e7e0d5",
+                    }}
+                    onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+                  />
+                ) : (
+                  <div
+                    aria-hidden
+                    style={{
+                      width: 64,
+                      height: 96,
+                      borderRadius: 6,
+                      background: "linear-gradient(180deg,#f1ede5,#e8e1d6)",
+                      border: "1px solid #e7e0d5",
+                      display: "grid",
+                      placeItems: "center",
+                      color: "#9c8f7a",
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  >
+                    No Cover
+                  </div>
+                )}
+
+                <div>
+                  <div style={{ fontWeight: 700 }}>
+                    {b.title || "Untitled"}
+                  </div>
+                  {author && (
+                    <div style={{ opacity: 0.8 }}>{author}</div>
+                  )}
+                  {b.isbn && (
+                    <div style={{ fontFamily: "monospace", fontSize: 12 }}>
+                      ISBN: {b.isbn}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <button
+            type="submit"
+            disabled={!items || items.length === 0 || selected.length === 0}
+            className="cc-btn"
+            style={{
+              padding: "10px 20px",
+              backgroundColor: "#365c4a",
+              color: "#fff",
+              border: "none",
+              cursor: "pointer",
+              borderRadius: 8,
+              fontWeight: 700,
+            }}
+          >
+            Email Selected to Cozy & Content
+          </button>
+        </div>
+      </form>
     </main>
   );
 }
