@@ -167,11 +167,39 @@ export default function ListPage() {
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-        <button className="cc-btn-outline" onClick={() => history.back()}>← Back</button>
-        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>{list?.name || "Wishlist"}</h1>
-        <a className="cc-btn-outline" href="/order">🧺 Order</a>
+      {/* Centered title bar using grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
+          alignItems: "center",
+          marginBottom: 12,
+          gap: 8,
+        }}
+      >
+        <button className="cc-btn-outline" onClick={() => history.back()} style={{ justifySelf: "start" }}>
+          ← Back
+        </button>
+
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, textAlign: "center" }}>
+          {list?.name || "Wishlist"}
+        </h1>
+
+        <a className="cc-btn-outline" href="/order" style={{ justifySelf: "end" }}>
+          🧺 Order
+        </a>
       </div>
+
+      {/* Sharing explainer */}
+      {list && (
+        <div className="cc-card" style={{ marginBottom: 12, lineHeight: 1.4 }}>
+          <strong>Sharing tip:</strong> To share this wishlist or individual items, make the wishlist{" "}
+          <em>Public</em> first. Use the <strong>{list.isPublic ? "Make Private" : "Make Public"}</strong> button below.
+          <div style={{ marginTop: 6, fontSize: 13, color: "var(--cc-sub)" }}>
+            Status: {list.isPublic ? "🔗 Public — anyone with the link can view" : "🔒 Private — only you can view"}
+          </div>
+        </div>
+      )}
 
       {list && (
         <div className="cc-card wishlist-actions">
@@ -276,7 +304,8 @@ function ShareMenu({ shareId, shareUrl, copy, shareList }) {
   return (
     <div style={{ position: "relative" }}>
       <button className="cc-btn-outline secondary share-btn" onClick={toggle}>
-📤 Share</button>
+        📤 Share
+      </button>
 
       {open && (
         <div
